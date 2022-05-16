@@ -1,0 +1,372 @@
+---
+title: "experiments2022"
+author: "mira"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(sp)
+library(fields)
+library(gstat)
+library(gear)
+
+```
+
+# spatial conformal prediction: univariate 
+
+## scp prediction 
+demonstration with univariate data. krigging based point prediction and conformal based confidence interval.
+ref
+Barber, R. F., Candes, E. J., Ramdas, A., & Tibshirani, R. J. (2022). Conformal prediction beyond exchangeability. arXiv preprint arXiv:2202.13415.
+
+Mao, H., Martin, R., & Reich, B. (2020). Valid model-free spatial prediction. arXiv preprint arXiv:2006.15640.https://github.com/mhuiying/scp
+
+Mattern cov func, Bessel func $K_k(.)$
+$\rho(u;\phi,\kappa)=\{2^{\kappa-1}\Gamma(\kappa)\}^{-1}(\frac{u}{\phi})^{\kappa} K_k(\frac{u}{\phi})$
+
+```{r utils covariance matrix,include=TRUE, eval=FALSE}
+# Matern covariance fuction 
+# matern, https://github.com/cran/geoR/blob/master/R/corcov.R
+# u distance, vec matrix or array of the distances between point pairs
+# phi the range parameter
+# kappa the smoothness parameter 
+# $\rho(u;\phi,\kappa)=\{2^{\kappa-1}\Gamma(\kappa)\}^{-1}(\frac{u}{\phi})^{\kappa} K_k(\frac{u}{\phi})$
+matern <- function (u, phi, kappa) {
+  if(is.vector(u)) names(u) <- NULL
+  if(is.matrix(u)) dimnames(u) <- list(NULL, NULL)
+  uphi <- u/phi
+  uphi <- ifelse(u > 0,
+                 (((2^(-(kappa-1)))/ifelse(0, Inf,gamma(kappa))) *
+                  (uphi^kappa) *
+                  besselK(x=uphi, nu=kappa)), 1)    
+  uphi[u > 600*phi] <- 0 
+  return(uphi)
+}
+# d a numeric distance, a vector or matrix
+# theta parameter [Nugget, Sill, Range, Smoothness]
+mat_cov <- function(d,theta){
+  theta[1]*diag(nrow(d)) + theta[2]*matern(d,theta[3],theta[4])
+}
+
+```
+
+
+```{r test setup,include=TRUE, eval=FALSE}
+# test setup
+set.seed(123)
+N <- 11
+n <- N^2
+S <- seq(0,1,length=N) # 11
+s <- expand.grid(S,S) # 121
+d <- as.matrix(dist(s)) # 121*121
+
+theta <- c(0,3,0.1,0.7)
+names(theta) <- c("Nugget","Sill","Range","Smoothness")
+C <- mat_cov(d,theta) # 121*121
+
+X <- t(chol(C))%*%rnorm(n) # 121*1
+Y <- X^3 + rnorm(n) # 121*1
+plot(Y~X)
+
+
+```
+
+
+```{r Estimate theta,include=TRUE, eval=FALSE}
+# estimate parameters for covariance via variogram fitting
+# variogram est with fields::vgram which returns a vgram object
+
+# s spatial locations
+# Y 
+# dists breakpoints for variogram bins
+# return Matern covariance parameters theta
+
+get_theta <- function(s, Y, dists = NULL) {
+  # variogram estimation (not binned?), 
+  s<- as.matrix(s)
+  max_range=max(dist(s))
+  vg <- fields::vgram(s, Y, dmax=max_range, breaks = dists,type="variogram") 
+  # vgran() ouput d, vgram ...
+  
+  wsse <- function(logtheta, d, v, max_range) {
+    # theta to be optimised, 
+    # d a vector of distances
+    # v a vector of estimated variogram values at distance d
+    # n number of pairs in each bin for binned variogram
+    theta <- exp(logtheta)
+    theta[4] <- max_range*pnorm(logtheta[4])
+    m  <- theta[1] + theta[2] - theta[2]*matern(d,theta[3],theta[4])
+    out <- sum((v - m)^2)
+    return(out)}
+  
+  init <- c(0.5 * var(Y, na.rm = TRUE), 0.5 * var(Y, na.rm = TRUE),
+            quantile(vg$d,0.5), 0.5)
+  
+  fit <- optim(log(init), wsse, d = vg$d, v = vg$vgram, max_range=max_range) 
+  
+  theta <- exp(fit$par)
+  theta[4] <- max_range*pnorm(fit$par[4])
+  names(theta) <- c("Nugget", "Sill", "Range", "Smoothness")
+  return(theta)
+  }
+```
+
+
+```{r,include=TRUE, eval=FALSE}
+######################## test get_theta
+# Estimate spatial covariance parameters
+# oracle: theta = c(0,  3,  0.1,  0.7)
+
+bins <- seq(0.01,0.2,0.01) # 20 bins
+thetaHat <- get_theta(s,Y,dists=bins)
+
+thetaHat # 65.8,  29.2,  2.46, 0.000086
+
+```
+
+
+```{r select eta kernel bandwidth,include=TRUE, eval=FALSE}
+# calculate interval score
+# interval lower bound l, upper bound u, data x, significance level alpha
+# return a value of interval score
+interval_score <- function(l, u, x, alpha = 0.05){
+  width <- u - l
+  sl <- 2 / alpha * (l - x) * (x < l)
+  su <- 2 / alpha * (x - u) * (x > u)
+  width + sl + su
+}
+
+# select eta the tuning parameter for scp, kernel bandwidth for weight schema
+# s
+# Y
+# eta_cand a vector of canditate eta values, default to null
+# return optimum eta based on minimizing empirical interval score
+
+select_eta <- function(s,Y,eta_cand = NULL){
+  bins <- seq(0.01,0.2,0.01)
+  thetaHat <- get_theta(s,Y,dists=bins)
+  min_d <- min(dist(s))
+  eta_cand <- seq(3*min_d, 20*min_d, min_d)
+  # random sample of prediction point
+  valid_id <- sample(1:nrow(s),1)
+  # compute and store intScore for candidate eta values
+  intScore <- c()
+  for(i in 1:length(eta_cand)){
+    PIs <- scp(s0=s[valid_id,],s=s[-valid_id,],Y=Y[-valid_id],thetaHat=thetaHat,eta=eta_cand[i],m=20,precision=0.1)
+    intScore <- c(intScore, interval_score(PIs[1], PIs[2], Y[valid_id]))
+  }
+  opt_eta <- eta_cand[which.min(intScore)]
+  # plot 
+  plot(eta_cand, intScore, type = "b", xlab = "eta", ylab = "interval score")
+  abline(v = opt_eta, col = "red", lty=2)
+  return(opt_eta)
+}
+```
+
+
+```{r, eval=FALSE}
+############################## test select_eta
+
+test.eta <- select_eta(s,Y,eta_cand = NULL) # not varying by eta_cand ???
+test.eta # 0.3
+
+```
+
+
+```{r prime,include=TRUE, eval=FALSE}
+# Transform the input for local SCP prediction
+# s0 prediction location 1x2 
+# s n x 2 matrix or data.frame
+# Y n dim
+# eta kernel bandwidth. Defauls to Inf equal weight on m points.
+# m number of nearest locations to use for prediction.
+
+.prime <- function(s0,s,Y,eta,m){
+  # Determine these surrounding m points for prediction， LSCP
+  dist <- sqrt( (as.numeric(s0[1])-s[,1])^2 + (as.numeric(s0[2])-s[,2])^2 )
+  these <- order(dist)[1:m] # vector of location index
+  # subset selected points
+  s_aug <- rbind(s0, s[these,])
+  Y_aug <- c(NA, Y[these])
+  d_aug <- as.matrix(dist(s_aug))
+  # calculate weights w
+  M <- length(these)
+  if(eta==Inf){
+    w <- rep(1/(M+1),M+1) # equal weights to all m points
+  }else{
+    w <- d_aug[1,-1]/eta
+    w <- c(1, exp(-0.5*w^2)) # exponential decay 
+    w <- w/sum(w)
+  }
+  # output
+  s_aug <<- s_aug
+  Y_aug <<- Y_aug
+  w_aug <<- w
+  d_aug <<- d_aug
+}
+```
+
+
+```{r compute_UVW,include=TRUE, eval=FALSE}
+# compute U, V, W when delta_i = (Y_i - Yhat_i)^2
+# Q inverse of the covariance matrix
+# Y 
+# return a list of U, V, W values
+.compute_UVW2 <- function(Q,Y){
+  Ysub <- Y[-1]
+  Qrow <- Q[1,-1]
+  Qsub <- Q[-1,-1]
+  dQsub <- diag(Qsub)
+  Yhat <- sum(Qrow*Ysub)/Q[1,1]
+  Ytilde <- Qsub%*%Ysub/dQsub
+  U <- Ytilde^2-Yhat^2
+  V <- Ytilde*Qrow/dQsub - Yhat
+  W <- Qrow*Qrow/(dQsub*dQsub)-1
+  out <- list(U=c(0,U),V=c(0,2*V),W=c(0,W))
+  return(out)}
+```
+
+
+```{r plausibility,include=TRUE, eval=FALSE}
+# Fast plausibility_contour calculation when pred_fun = Krige_fun and dfun = residual^2 and weights are provided.
+# s0 prediction location
+# s n by d matrix or data-frame with d coordinates of the n locations.
+# Y 
+# w weights for the non-conformity measures.
+# Q n+1 by n+1 inverse of estimated covariance matrix
+# alpha significance level. Defaults to 0.05.
+# return A vector of lower/ upper bounds of the conformal prediction interval.
+
+.plausibility_contour <- function(Y_aug,w_aug,Q){
+
+  UVW <- .compute_UVW2(Q,Y_aug)
+  U <- UVW$U[-1]
+  V <- UVW$V[-1]
+  W <- UVW$W[-1]
+
+  low <- (-V + sqrt(V^2 - 4*U*W))/(2*W)
+  upp <- (-V - sqrt(V^2 - 4*U*W))/(2*W)
+
+  w  <- w_aug[-1]
+  lu_w  <- c(w,w)
+  lu_lab <- c(rep(1, length(low)), rep(-1, length(upp)))
+  lu_w   <- lu_w[order(c(low, upp))]
+  lu_lab <- lu_lab[order(c(low, upp))]
+
+  y0 <- sort(c(low, upp))
+  p_y <- cumsum(lu_w*lu_lab)
+
+  return(data.frame(Y_cand=y0,p_y=p_y))
+}
+```
+
+
+```{r, eval=FALSE}
+############################## test plausibility
+
+.prime(s0,s,Y,eta=Inf,m=20) 
+Q.test <- solve(mat_cov(d_aug,thetaHat))
+p_df  <- .plausibility_contour(Y_aug,w_aug,Q.test)
+plot(p_df) # Y_cand narrowly centered around 0.5
+
+.prime(s0,s,Y,eta=0.5,m=20) 
+Q.test <- solve(mat_cov(d_aug,thetaHat))
+p_df  <- .plausibility_contour(Y_aug,w_aug,Q.test)
+plot(p_df) # also works
+
+```
+
+
+```{r krig prediction func,include=TRUE, eval=FALSE}
+# Kriging prediction function for pred_fun, point prediction at s0 given s and Y
+# s0 prediction location, a numeric vector with length = 2.
+# s n x 2 matrix or data.frame.length(s0)= ncol(s)
+# Y n dim length(Y)= nrow(s)
+# return a value of point prediction for Y(s0);
+
+krige_pred <- function(s0,s,Y){
+  bins <- seq(0.01,0.2,0.01) # bins chosen how???
+  thetaHat <- get_theta(s,Y,dists=bins)
+  idx <- which(s[,1]==s0[1] & s[,2]==s0[2])
+  if(length(idx) > 0){s = s[-idx,]; Y = Y[-idx]}
+  # distance matrix
+  s_aug <- rbind(s0,s)
+  d_aug <- as.matrix(dist(s_aug))
+  # inverse covariance matrix
+  Q <- solve(mat_cov(d_aug,thetaHat))
+  # Kriging prediction
+  yhat  <- as.numeric(-Q[1,-1]%*%Y/Q[1,1])
+  sd <- 1/sqrt(Q[1,1])
+  return(yhat)
+}
+```
+
+
+```{r, eval=FALSE}
+############################## test kriging
+s0 <- c(0.5, 0.5)
+
+idx <- which(s[,1]==s0[1] & s[,2]==s0[2]) # 61
+Y[61,] # 1.799352
+
+pred.test <- krige_pred(s0=s0,s=s[-idx,],Y=Y[-idx])
+# 0.0138
+
+```
+
+
+```{r Spatial conformal prediction scp,include=TRUE, eval=FALSE}
+# Spatial conformal prediction at single input location
+# using by default kriging for prediction, and squared residual for non-conformity measure.
+# s0 prediction location(s)
+# s coordinates of locations.
+# Y 
+# eta kernel bandwidth
+# m num of nearest locations to use for prediction.
+# thetaHat [nugget, sill, range, smoothness[] from get_theta
+# precision 
+# alpha significance level. Defaults to 0.05.
+# return lower and upper pred bounds at s0.
+
+scp <- function(s0,s,Y,eta=Inf,m=NULL,thetaHat=NULL,precision=NULL,alpha=0.05){
+
+  gamma <- data.frame(lower = NA, upper = NA)
+  
+  .prime(s0,s,Y,eta,m) # output Y_aug w_aug d_aug
+  Q <- solve(mat_cov(d_aug,thetaHat))
+  
+  p_df  <- .plausibility_contour(Y_aug,w_aug,Q) 
+  Y_cand <- p_df$Y_cand
+  p_y  <- p_df$p_y
+
+  gamma <- range(Y_cand[which(p_y >= floor((M+1) * alpha) / (M+1))])
+
+  return(gamma)
+}
+```
+
+
+```{r, eval=FALSE}
+############################## test scp
+
+Y[61,] # 1.799352  at (0.5, 0.5)
+
+scp.test <- scp(s0=s0,s=s[-61,],Y=Y[-61], m=20, thetaHat=thetaHat, precision=0.5)
+
+scp.test # -26.91262  25.81170
+
+scp.test <- scp(s0=s0,s=s[-61,],Y=Y[-61], eta=0.3, m=20, thetaHat=thetaHat, precision=0.5)
+
+scp.test # change eta, same results......
+
+```
+

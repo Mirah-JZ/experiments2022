@@ -1,2 +1,3 @@
 # experiments2022
- work in progress
+Work in progress
+Documents replication of relevant papers and experiments for the dissertation project.

@@ -1,0 +1,24 @@
+---
+title: "casestudies"
+author: "mira"
+date: "2022/6/15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Demonstration on real data
+
+## Chicago crime rates
+
+```{r , eval=FALSE}
+
+```
+
+## UK house prices
+
+```{r , eval=FALSE}
+
+```

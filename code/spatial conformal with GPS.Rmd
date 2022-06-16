@@ -24,6 +24,7 @@ library(igraph)
 library(xgboost)
 library(MASS)
 library(nnet)
+library(blockCV)
 #library(causalToolbox)
 
 ```
@@ -47,21 +48,21 @@ Relation to prior work: Extension and synthesis of prior work to spatial interfe
 
 # The proposed routine of analysis
 
-## Get propensity scores for spatial interference
+## Genralised propensity scores for spatial interference
 
-### Interference and definitions of causal effects
+### Interference and definitions of causal effects (Aronow; Forastiere; ...)
 With interference, there can be multiple levels of exposure to unit $i$ even for binary treatments. That is, the actual exposure level is a function of the unit's treatment $Z_{i}$ and others' treatment program $G_{i}$. The generalised propensity score $e(x,g)$ (Hirano & Imbens, 2004) has been developed for these scenarios (Forastiere et.al., 2021). Exposure level can be treated as either continuous or discretised. Here, for simplicity, we start with four levels of treatment,  $(Z_{i}=0,G_{i}=0)$ , $(Z_{i}=0,G_{i}=1)$ , $(Z_{i}=1,G_{i}=0)$ , $(Z_{i}=1,G_{i}=1)$. Treatment $G_{i}$ is defined as a function of the proportion of unit i's neighbours getting treatment. (Forastiere originally proposed to work with many strata of treatment levels.)
 
-### The joint propensity score and its properties 
+### The joint propensity score and its properties (Forastiere; ...)
 The bivariate treatment to a unit and its neighbors is a joint treatment. The joint propensity score is the probability of assignment to a particular individual and neighborhood treatment given the observed covariates. The covariates to predict the propensity score can include individual level attributes of unit $i$, as well as neighborhood level aggregate attributes and spatial network structural properties.  
 
 The joint score can be factorised: $e(z,g,x)=P(Z_{i}=z,G_{i}=g|X_{i}=x)=P(Z_{i}=z|G_{i}=g,X_{i}^z=x^z)P(G_{i}=g|X_{i}^g=x^g)$ The factorised form is easier to work with, especially if we assume $Z_{i}$  is conditional independent of $G_{-i}$, that is, individual treatment assignments are determined by covariates indepedently. Unconfoundedness holds not only conditional on the joint propensity score but also conditional on the individual and neighborhood propensity scores. This gives an unbiased estimator for the average dose response function with both individual and neighbor propensity scores being adjusted for $E[E[Y_{i}|Z_{i}=z,G_{i}=g,\phi(X_{i}^z),\lambda(g,z,X_{i}^g)]|Z_{i}=z,G_{i}=g]$. The individual ps can be obtained with standard binary treatment ps methods. The neighborhood ps requires generalised ps methods, since $G_{i}$ is not binary. Still, the question remains, how do we define the influencing 'neighborhood' of a unit? In fact, is it possible at all to define it without referencing the observed outcomes (i.e. exogenously)???
 
 
+### Estimate gps for binary individual treatment with spatial interference (new)
 ref:  
 https://github.com/cran/CausalGPS/blob/master/R/estimate_gps.R
 https://github.com/cran/twangRDC/blob/master/R/ps.xgb.r
-
 ```{r get_gps, include=TRUE, eval=FALSE}
 # the psfun
 # input
@@ -133,15 +134,15 @@ get_gps <- function(tr,
    
   # fit treatment model and estimate propensity scores
   if (pstype=="joint"){
-    if (pred_model=="multinom"){
-         pred0 <- nnet::multinom(x=covar0,y=tl)
-         # insert code here
+    if (pred_model=="multinom"){stop('nnet multinom currently not supported.')
+         #pred0 <- nnet::multinom(x=covar0,y=tl) # nnet accepts formula, needs formatting
+         #ps <- as.matrix(nnet::predict.nnet(pred0,newdata=data0))
     }
     if (pred_model=="xgboost"){
          pred0 <- xgboost::xgboost(data=covar0,label=tl) # data in matrix 
-         # insert code here
+         ps <- as.matrix(predict(pred0,newdata=data0))
     }
-    if (pred_model=="binom"){stop('Joint ps cannot be estimated with binomial model.')}
+    if (pred_model=="binomial"){stop('Joint ps cannot be estimated with binomial model.')}
   }
   
   if (pstype=="conditional"){
@@ -171,7 +172,7 @@ get_gps <- function(tr,
 The generalised propensity restores the ignorability and SUTVA assumptions underpinning classic PO framework. In the case of non-trivial spatial interference, we try to estimate the total effect $Y_{i}(Z_{i}=1,G_{-i}=1)-Y_{i}(Z_{i}=0,G_{-i}=0)$ , direct effect $Y_{i}(Z_{i}=1,G_{-i}=0)-Y_{i}(Z_{i}=0,G_{-i}=0)$ and spillover effect $Y_{i}(Z_{i}=0,G_{-i}=1)-Y_{i}(Z_{i}=0,G_{-i}=0)$.
 
 ref: 
-Lei, L. & Candes, E. (2021) Conformal Inference of Counterfactuals and Individual Treatment Effects. arXiv:2006.06138v2 
+Lei, L. & Candes, E. (2021) Conformal Inference of Counterfactuals and Individual Treatment Effects. arXiv:2006.06138v2 https://github.com/zhimeir/cfsensitivity
 
 
 ```{r utils, include=FALSE, eval=FALSE}
@@ -179,9 +180,11 @@ source("utils.R", local = knitr::knit_global())
 #  imports conformalScore, gen_cv_ids, weightedConformalCutoff, RF, quantRF, Boosting
 ```
 
-### generic split conformal 
-Using CV is more efficient. For each of the folds, the generic split conformal procedure defined above is carried out. Here we use the split conformal.
-```{r}
+## generic weighted split conformal (Tibshirani, 2019)
+splits data into training and val sets. The weighting across training and test sets provides robustness against distribution shift. The weighting can be exploited to make counterfactual predictions, as Lei et.al. (2021) has demonstarted.
+
+
+```{r conformalSplit}
 
 # X, Y
 # outfun
@@ -239,19 +242,19 @@ conformalSplit <- functon(X, Y, Xtest,
   out <- data.frame(lower = Ylo, upper = Yup)
   return(out)
 }
-
 ```
 
 
-### counterfactual prediction with weighted split conformal
+## counterfactual prediction with ps weighted conformal
 
-Counterfactual conformal prediction is similar to generic conformal prediction. It is an application of weighted confomal prediction (Tibshirani, 2019).  The main feature of counterfactual conformal prediction is the introduction of propensity scores e(x) for the weighting. The weights in IPW estimators are essentially calibrating the observed covariate distribution to the target one. This is similar in spirit to weighted conformal inference. In counterfactual conformal prediction, the weighting procedure is used to address the covariate distribution shift between treatment and control groups (i.e. the sampling and target population when fitting model on treatment group observations and make counterfactual prediction on control group individuals).
+Counterfactual conformal prediction is an extension of generic conformal prediction. It is an application of weighted confomal prediction.  The main feature of counterfactual conformal prediction is the introduction of propensity scores e(x) for the weighting. The ps weighted conformal inference is in spirit similar to IPW. In the IPW estimators, the weights calibrate the observed covariate distribution to the target one.  Similarly, in counterfactual conformal prediction, the weighting addresses the covariate distribution shift between treatment and control groups (i.e. the sampling and target population when fitting model on treatment group observations and make counterfactual prediction on control group individuals).
 
 For counterfactual inference on Y(1), use 1/e(x) as weights; for Y(0), use 1/(1-e(x)).
 
-The ccf has doubly robust properties.
+The estimation procedure has lovely doubly robust properties.
 
-```{r}
+### counterfactual prediction with ps weighted split conformal, binary treatment (Lei, 2021) 
+```{r conformalCf_split}
 # X, Y
 # type="mean"
 # side=two sided
@@ -296,23 +299,206 @@ conformalCf_split <- function(X, Y,
 ```
 
 
-Further subset training set to local support.
+### weighted split conformal + location weights. (new)
 
-```{r}
-# s0 is a given location
-# for s0 we subset the nearest m support points (by some distance measure, most commonly geo distance) to base the conformal prediction on
+Doable: To handle non-exchangeability in spatial datasets, higher weights are given to local samples.
+
+
+```{r location_weights}
+# create location weights
+
+# for given ocation s0, the nearest m support points (by some distance measure, most commonly geo distance) are given higher weights to base the conformal prediction on
 # this dist info is already supplied in the A matrix we used for obtaining gps
 # the m points can be equally weighted or given a dist decay
-
-
-
 
 ```
 
 
-## Use counterfactual predictions to construct ITE intervals.
+```{python CP_LS}
+# ref Candes 2022  conformal prediction with least squares
 
-If the goal is to obtain ITE for observed samples, since for each individual we already have one potential outcome, the ITEs can be constructed as the differences between the observed outcome and the predicted counterfactual outcomes. It will be more complicated if trying to draw inference on unobserved individuals or even transfer to a new population. This entails predicting all potential outcomes.
+def CP_LS(X,Y,x,alpha,weights=[],tags=[]):
+    # weights are used for computing quantiles for the prediction interval
+    # tags are used as weights in weighted least squares regression
+    n = len(Y)
+    
+    if(len(tags)==0):
+        tags = np.ones(n+1)
+    if(len(weights)==0):
+        weights = np.ones(n+1)
+    if(len(weights)==n):
+        weights = np.r_[weights,1]
+    weights = weights / np.sum(weights)
+    # randomly permute one weight for the regression
+    random_ind = int(np.where(np.random.multinomial(1,weights,1))[1])
+    tags[np.c_[random_ind,n]] = tags[np.c_[n,random_ind]]
+    # least squares estimation of Y
+    XtX = (X.T*tags[:-1]).dot(X) + np.outer(x,x)*tags[-1]
+    a = Y - X.dot(np.linalg.solve(XtX,(X.T*tags[:-1]).dot(Y)))
+    b = -X.dot(np.linalg.solve(XtX,x))*tags[-1]
+    a1 = -x.T.dot(np.linalg.solve(XtX,(X.T*tags[:-1]).dot(Y)))
+    b1 = 1 - x.T.dot(np.linalg.solve(XtX,x))*tags[-1]
+    # if we run weighted least squares on (X[1,],Y[1]),...(X[n,],Y[n]),(x,y)
+    # then a + b*y = residuals of data points 1,..,n
+    # and a1 + b1*y = residual of data point n+1
+    y_knots = np.sort(np.unique(np.r_[((a-a1)/(b1-b)),((-a-a1)/(b1+b))]))
+    y_inds_keep = np.where( ((np.abs(np.outer(a1+b1*y_knots,np.ones(n))) > \
+       np.abs(np.outer(np.ones(len(y_knots)),a)+np.outer(y_knots,b))) *\
+                             weights[:-1] ).sum(1) <= 1-alpha )[0] 
+    # prediction interval
+    y_PI = np.array([y_knots[y_inds_keep.min()],y_knots[y_inds_keep.max()]])
+    
+    return y_PI
+```
 
+
+### counterfactual prediction with ps weighted split conformal + location weights. Binary treatment. (new)
+```{r}
+
+```
+
+
+### counterfactual prediction with ps weighted split conformal, local sampling. Under spatial interference, multiple levels of treatment. (new)
+
+For this, we apply our definition of causal effects (total, direct, spillover) and associated generalised propensity score weights. For simplicity, we start with stratified treatment levels. It can be extended to continuous exposure levels.
+
+```{r}
+
+```
+
+
+## Cross validation 
+
+### generic weighted conformal with CV (Tibshirani, 2019; Lei, 2021)
+In the following 2 code chunks, for each of the folds, the generic split weighted conformal procedure defined earlier is carried out. Computation wise, using CV is more efficient than the traditional split conformal. 
+
+```{r conformalCV}
+# X, Y
+# outfun
+# outparams (if CQR quantiles should be part of outparams, not necessary for mean estimation)
+# wtfun     a list of functions, length nfolds
+# alpha
+# nfolds
+# idlist    needs to a list of trainid of length 'nfolds'
+# Xtest testing covariates.
+# output prediction interval
+
+# gen_cv_ids() in utils.R
+
+conformalCV <- function(X, Y, Xtest,
+                        outfun, outparams,
+                        wtfun,
+                        alpha=0.1,
+                        nfolds, idlist){
+  # type="mean"
+  # side=two sided
+  # null is equal weights
+
+  if (is.null(wtfun)){
+      wtfun <- lapply(1:nfolds, function(k){function(X){rep(1, nrow(X))}})
+  }
+  # wtfun0 <- wtfun  
+  outparams0 <- outparams
+  
+  # generate trainid list
+  n <- length(Y)
+  if (is.null(idlist)){idlist <- gen_cv_ids(n, nfolds)}  
+  
+  temp <- list()
+  for (k in 1:nfolds){
+      # subset training data and val data inside each fold
+      testid <- idlist[[k]]
+      Xtrain <- X[-testid, ,drop=FALSE]
+      Ytrain <- Y[-testid]
+      Xval <- X[testid, ,drop=FALSE]
+      Yval <- Y[testid]
+      # prep outfun
+      outparams <- c(list(Y = Ytrain, X = Xtrain), outparams0)
+      Ymodel <- function(X){ do.call(outfun, c(outparams, list(Xtest = X)))}
+      # get Yhat mean estimate of Yval and residuals
+      Yhat <- Ymodel(Xval)
+      Yscore <- conformalScore(Yval, Yhat)
+      wt <- wtfun[[k]](Xval)
+      # get Yhat_test mean estimate of the targets Ytest
+      Yhat_test <- Ymodel(Xtest)
+      
+      wt_test <- wtfun[[k]](Xtest)
+      # prep weights
+      avg_wt <- mean(c(wt, wt_test))
+      wthigh <- 20 
+      wtlow <- 0.05
+      wt <- censoring(wt/avg_wt, wthigh, wtlow)
+      wt_test <- censoring(wt_test/avg_wt, wthigh, wtlow)
+      totw <- sum(wt)
+      wt <- wt / totw
+      # get Yslack
+      qt <- (1 + wt_test / totw) * (1 - alpha) # quantile 1-alpha
+      qt <- pmin(qt, 1) # cap quantile at 1
+      Yslack <- weightedConformalCutoff(Yscore, wt, qt) # find score(residual) at given qt
+      # from mean estimate to intervals
+      Ylo <- Yhat_test - Yslack
+      Yup <- Yhat_test + Yslack
+
+      temp[[k]] <- data.frame(lower = Ylo, upper = Yup)
+    
+  }
+  
+  out <- do.call("rbind",temp) # not exactly right, needs to take average
+  
+  return(out)
+}
+  
+```
+
+### generic weighted conformal with k-fold spatial CV (adapted)
+
+Is spatial CV necessary?
+
+spatial CV methods are typically motivated by a few concerns. For example: (1) correlation between training and validation sets (e.g. through spatial overlap) undermines validation set's ability to signal overfitting. (2) implicit spatial info hinders model's transferability to other spatial domains. (3) folds-splitting that does not preserve spatial structures (esp. random resampling that ignores spatial clusters) could lead to biased model. A variety of spatial CV techniques for model training and assessment are at our disposal depending on the priorities.
+
+In the conformal inference literature, thoughts on spatial CV are scarce. In our study, when the goal is counterfactual prediction for the sampling population, we are much less concerned about overfitting or transferability than model bias. Therefore, if necessary, we use CV with spatial blocking. 
+
+gen_spacv_ids() defined in the following code chunk can replace gen_cv_ids() to implement spatial CV in conformal procedures. 
+
+The samples within each CV blocks may or may not satisfy approximate exchangeability. Unless they do, spatial CV alone does not solve the problem of non-exchangeability within each fold. For that, we may still need the local resampling trick (or something equivalent).
+
+
+```{r get_spacv_ids}
+# Generate a list of indices for spatial cross validation
+# modified version of gen_cv_ids()
+# takes distance matrix/ sparse adjacency matrix A as input
+# spectral clustering on the matrix to create spatial folds
+
+# alternatively, can input sf object and create grided folds with blockCV::spatialBlock
+
+gen_spacv_ids <- function(n,nfolds, A, typeA="adj"){
+  idlist <- list()
+  idx<-rep(1,n)
+  if (typeA=="adj") {
+    # netA <- igraph::graph_from_adjacency_matrix(A,mode="undirected",weighted=FALSE)
+    # clu <- cluster_walktrap(netA) 
+    clu <- greed::spectral(A,nfolds) # return vec of group membership
+  } else if (typeA=="dist") {
+    # clu <- adjclust::adjClust(A,type="dissimilarity",h=1000) # returns a tree
+    # dependency on sparseMatrixStats? requires sparse matrix?
+    clu <- hclust(A)
+    clu <- cutree(clu,k=nfolds) # return vec of group membership
+  }
+  
+  if (is.na(clu)){stop('Failed clustering.')}
+    
+  t <- cbind(idx,clu)
+  for (i in 1:nfolds) {idlist[[i]]<-t$idx[which(t$clu==i),]}
+  
+  # need to regularize sizes of clusters!!!
+  
+  return(idlist)
+}
+```
+
+### ps weighted conformal with k-fold spatial CV 
+```{r}
+
+```
 
 

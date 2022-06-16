@@ -94,3 +94,23 @@ Boosting <- function(Y, X, Xtest, n.trees = 100){
   
   return(res)
 }
+
+# -----------------------------------------------------------------------------
+# spectral clustering for spatal CV folds
+# -----------------------------------------------------------------------------
+library(RSpectra)
+# ref greed::spectral()
+spectral <- function(X, K) {
+  X <- X + Matrix::t(X)
+  ij <- Matrix::which(X > 0, arr.ind = T)
+  X[ij] <- 1
+  nu <- sum(X) / dim(X)[1]
+  D <- (Matrix::rowSums(X) + nu)^-0.5
+  Ln <- Matrix::sparseMatrix(ij[, 1], ij[, 2], x = D[ij[, 1]] * D[ij[, 2]])
+  V <- RSpectra::eigs(Ln, K)
+  Xp <- V$vectors
+  Xpn <- Xp / sqrt(rowSums(Xp)^2)
+  Xpn[rowSums(Xp) == 0, ] <- 0
+  km <- kmeans(Xp, K)
+  km$cluster
+}

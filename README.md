@@ -17,3 +17,5 @@ https://github.com/mhuiying/scp.
   
 Barber, R. F., Candes, E. J., Ramdas, A., & Tibshirani, R. J. (2022). Conformal prediction beyond exchangeability. arXiv preprint arXiv:2202.13415.  
 https://rinafb.github.io/code/nonexchangeable_conformal.zip.  
+
+Williams, J. R., & Crespi, C. M. (2020). Causal inference for multiple continuous exposures via the multivariate generalized propensity score. arXiv preprint arXiv:2008.13767. https://github.com/williazo/mvGPS

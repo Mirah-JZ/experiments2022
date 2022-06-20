@@ -20,12 +20,10 @@ library(gbm)
 library(randomForest)
 library(bartMachine)
 library(igraph)
-#library(SuperLearner)
 library(xgboost)
 library(MASS)
 library(nnet)
 library(blockCV)
-#library(causalToolbox)
 
 ```
 
@@ -51,10 +49,14 @@ Relation to prior work: Extension and synthesis of prior work to spatial interfe
 ## Genralised propensity scores for spatial interference
 
 ### Interference and definitions of causal effects (Aronow; Forastiere; ...)
-With interference, there can be multiple levels of exposure to unit $i$ even for binary treatments. That is, the actual exposure level is a function of the unit's treatment $Z_{i}$ and others' treatment program $G_{i}$. The generalised propensity score $e(x,g)$ (Hirano & Imbens, 2004) has been developed for these scenarios (Forastiere et.al., 2021). Exposure level can be treated as either continuous or discretised. Here, for simplicity, we start with four levels of treatment,  $(Z_{i}=0,G_{i}=0)$ , $(Z_{i}=0,G_{i}=1)$ , $(Z_{i}=1,G_{i}=0)$ , $(Z_{i}=1,G_{i}=1)$. Treatment $G_{i}$ is defined as a function of the proportion of unit i's neighbours getting treatment. (Forastiere originally proposed to work with many strata of treatment levels.)
+With interference, there can be multiple levels of exposure to unit $i$ even for binary treatments. That is, the actual exposure level is a function of the unit's treatment $Z_{i}$ and others' treatment program $G_{i}$. The generalised propensity score $e(x,g)$ (Hirano & Imbens, 2004) has been developed for these scenarios (Forastiere et.al., 2021). Exposure level can be treated as either continuous or discretised. Here, for simplicity, we start with four levels of treatment,  $(Z_{i}=0,G_{i}=0)$ , $(Z_{i}=0,G_{i}=1)$ , $(Z_{i}=1,G_{i}=0)$ , $(Z_{i}=1,G_{i}=1)$. Treatment $G_{i}$ is defined as a function of the proportion of unit i's neighbours getting treatment.
 
-### The joint propensity score and its properties (Forastiere; ...)
-The bivariate treatment to a unit and its neighbors is a joint treatment. The joint propensity score is the probability of assignment to a particular individual and neighborhood treatment given the observed covariates. The covariates to predict the propensity score can include individual level attributes of unit $i$, as well as neighborhood level aggregate attributes and spatial network structural properties.  
+Alternatively, we consider Z to be a binary treatment, while G is a continuous neighborhood exposure, represented by a function of the proportion of a unit's neighbors getting treatment. In this case, conditional on Z, we can estimate a dose response function (DRF) reflecting how the potential outcome is affected by exposure to varying levels of neighborhood treatment. This is the spillover effect conditional on Z(x). The direct effect can be obtained by integrating over the empirical distribution of $X^g$ and take the difference $E[Y(1)]-E[Y(0)]$. The total effect can be further obtained as $E[E[Y(1)]-E[Y(0)]]$ .
+
+In a more general setting, we can consider continuous treatment for Z. In this case, the GPS can be a bivariate Normal distribution (williams, 2020). And the DRF will be a response surface.
+
+### The joint propensity score and its properties (Forastiere; Williams; ...)
+The bivariate treatment to a unit and its neighborhood is a joint treatment. The joint propensity score is the probability of assignment to a particular individual and neighborhood treatment given the observed covariates. The covariates to predict the propensity score can include individual level attributes of unit $i$, as well as neighborhood level aggregate attributes and spatial network structural properties.  
 
 The joint score can be factorised: $e(z,g,x)=P(Z_{i}=z,G_{i}=g|X_{i}=x)=P(Z_{i}=z|G_{i}=g,X_{i}^z=x^z)P(G_{i}=g|X_{i}^g=x^g)$ The factorised form is easier to work with, especially if we assume $Z_{i}$  is conditional independent of $G_{-i}$, that is, individual treatment assignments are determined by covariates indepedently. Unconfoundedness holds not only conditional on the joint propensity score but also conditional on the individual and neighborhood propensity scores. This gives an unbiased estimator for the average dose response function with both individual and neighbor propensity scores being adjusted for $E[E[Y_{i}|Z_{i}=z,G_{i}=g,\phi(X_{i}^z),\lambda(g,z,X_{i}^g)]|Z_{i}=z,G_{i}=g]$. The individual ps can be obtained with standard binary treatment ps methods. The neighborhood ps requires generalised ps methods, since $G_{i}$ is not binary. Still, the question remains, how do we define the influencing 'neighborhood' of a unit? In fact, is it possible at all to define it without referencing the observed outcomes (i.e. exogenously)???
 
@@ -63,108 +65,234 @@ The joint score can be factorised: $e(z,g,x)=P(Z_{i}=z,G_{i}=g|X_{i}=x)=P(Z_{i}=
 ref:  
 https://github.com/cran/CausalGPS/blob/master/R/estimate_gps.R
 https://github.com/cran/twangRDC/blob/master/R/ps.xgb.r
-```{r get_gps, include=TRUE, eval=FALSE}
-# the psfun
+https://github.com/williazo/mvGPS/blob/master/R/mvGPS.R
+
+```{r get_gps_version1, include=TRUE, eval=FALSE}
+# binary treatment, 4 exposure levels 00, 01, 10, 11
+# treatment probability ~ multinom or binom
+# gps estimation via binomial_logit+factorisation/multinomial_logit or binomial_logit
+
+
 # input
 # tr          col vector of individual level binary treatments, numeric
 # covar       dataframe/matrix of covariates
-# A           spatial network, adjacency matrix or distance matrix 
-# Atype       type of A, "dist" or "adj", A does not have to be symmetric
-# pstype      "joint" e(x)=P(Z=1,G=g|X=x), 
-#             "conditional" e(x,g)=P(Z=1|G=g,X=x) take the product of P(G=g|X=x) or not...
-# pred_model  "xgboost" or "multinom" or "binom" (binom for conditional ps only)
+# A           spatial network A_ji, in the form of adjacency matrix or distance matrix 
+# Atype       type of A, "dist" or "adj", 
+#             A does not have to be symmetric. If directed, j in row index
+# pstype      "joint" f(x)=P(Z=z,G=g|X=x), 
+#             "conditional_g" f(x,z)=P(G=g|Z=z,X=x), 
+#             "conditional_z" f(x,g)=P(Z=z|G=g,X=x),
+#             Conditional ps are for the Forastiere procedure.
+# ps_pred_model  "xgboost" or "multinom" or "binomial" 
 # output
-# ps          propensity scores
+# ps          if pstype=="joint", outputs joint ps(Z,G) and marginals Z, G
+#             if pstype=="conditional_g", outputs marginal ps for G. 
+#             if pstype=="conditional_z", outputs marginal ps for Z.
 
-get_gps <- function(tr,
+get_gps1 <- function(tr,
                     covar,
                     A,
                     Atype="dist",
-                    pstype="conditional",
-                    pred_model="binomial"){
+                    pstype="joint",
+                    ps_pred_model="binomial"){
   # check args insert code here
   
   # format treatment and covariates
   n<-length(tr)
+  if (Atype=="dist") {
+    # define treatment levels tl based on tr and A, stratified to 4 treatment levels
+    
+    # these lines need to be put into a function  get_trnei1(tr,A,Atype)
+    A0 <- A
+    diag(A0) <-1
+    A0 <- A^(-1)
+    diag(A0) <- 0
+    A0 <- A0/rowSums(A0) # row std inverse dist, can try other dist decay
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE))*A0) # neighbor treatment level
+    trnei <- ifelse(trnei>0.5,1,0) # neighbor treatment {0,1}, 0.5 is arbitrary here
+    tl <- paste0("t",tr,trnei) # treatment level, multinomial.
+    
+    # construct neighborhood covariates, the average of neighbors
+    k <- ncol(covar) # num of covariates
+    covnei <- list()
+     for i in (1:k) {
+      covnei[[i]] <- rowSums(matrix(covar[,i],nrow=n,ncol=n,byrow=TRUE))*A0)
+    }
+    covnei <- as.data.frame(do.call(cbind,covnei))
+  } else if (Atype=="adj") {
+    # define treatment levels tl
+    A0 <- A
+    A0 <- A0/rowSums(A0) # row std 
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE))*A0)
+    trnei <- ifelse(trnei>0.5,1,0)
+    tl <- paste0("t",tr,trnei)
+    # construct neighborhood covariates, first order neighborhood means and network properties
+    k <- ncol(covar)
+    covnei <- list()
+    for i in (1:k) {
+      covnei[[i]] <- rowSums(matrix(covar[,i],nrow=n,ncol=n,byrow=TRUE))*A0)
+    }
+    covnei <- as.data.frame(do.call(cbind,covnei))
+    netA <- igraph::graph_from_adjacency_matrix(A,mode="undirected",weighted=FALSE)
+    dgr <- rowSums(A) # the node degrees
+    btwnss <- betweenness(netA, weights = NA) # betweeness centrality
+    covnei <- cbind.data.frame(covnei,dgr,btwnss)
+  }
+  covar0 <- cbind.data.frame(covar,covnei)
   
+  # fit treatment model and estimate propensity scores
+  if (pstype=="joint"){
+    if (ps_pred_model=="multinom") {
+         # nnet accepts formula, needs formatting
+         data0=cbind.data.frame(covar0,tl)
+         pred0 <- nnet::multinom(x=covar0,y=tl) 
+         ps <- predict(pred0,newdata=data0,type="probs")
+         # how are the cols ordered ?
+         # insert code here, get marginals
+         colnames(ps)<-c("t11","t10","t01","t00","z","g")
+    }
+    if (ps_pred_model=="binomial"){
+         # p(Z|X_z)
+         T_1 <- glm.fit(x=covar,y=tr,family="binomial")
+         std1 <- T_1$sigma 
+         pred1 <- T_1$fitted.values
+         ps1 <- dnorm(tr,mean=pred1,sd=std1) 
+         # p(Z|X_z,G)
+         T_11 <- glm.fit(x=c(covar,trnei),y=tr,family="binomial")
+         std11 <- T_11$sigma 
+         pred11 <- T_11$fitted.values
+         ps11 <- dnorm(tr,mean=pred11,sd=std11) 
+         # p(G|X_g)
+         T_2 <- glm.fit(x=covnei,y=trnei,family="binomial")
+         std2 <- T_2$sigma 
+         pred2 <- T_2$fitted.values
+         ps2 <- dnorm(trnei,mean=pred2,sd=std2) 
+         gps1 <- ps1*ps2 # z=1,g=1
+         gps2 <- ps1*(1-ps2) # z=1,g=0 
+         gps3 <- (1-ps1)*ps2 # z=0,g=1 
+         gps4 <- (1-ps1)*(1-ps2) # z=0,g=0 
+         ps<-cbind(gps1,gps2,gps3,gps4,ps1,ps2)
+         colnames(ps)<-c("t11","t10","t01","t00","z","g")
+    }
+    else if (ps_pred_model=="xgboost") stop('xgboost multinom currently not supported.')
+  }
+  
+  if (pstype=="conditional_g"){
+    # P(G=g|Z=z,X=x)
+    if (ps_pred_model=="xgboost"){
+         data0=cbind.data.frame(covar0,tr,trnei)
+         pred0 <- xgboost::xgboost(data=data0,label=trnei) 
+         ps <- as.matrix(predict(pred0,newdata=data0))
+    }else{
+         pred0 <- glm.fit(x=c(tr,covar0),y=trnei,family="binomial")
+         std <- pred0$sigma 
+         pred <- pred0$fitted.values
+         ps <- dnorm(trnei,mean=pred,sd=std) 
+    }    
+  }
+  if (pstype=="conditional_z"){
+    # P(Z=z|G=g,X=x)
+    if (ps_pred_model=="xgboost"){
+         data0=cbind.data.frame(covar0,tr,trnei)
+         pred0 <- xgboost::xgboost(data=data0,label=tr) 
+         ps <- as.matrix(predict(pred0,newdata=data0))
+    }else{
+         pred0 <- glm.fit(x=c(trnei,covar0),y=tr,family="binomial")
+         std <- pred0$sigma 
+         pred <- pred0$fitted.values
+         ps <- dnorm(tr,mean=pred,sd=std) 
+    }    
+  }  
+  # return the estimated propensity score
+  return(ps)
+}
+```
+
+
+```{r get_gps_version2,include=TRUE, eval=FALSE}
+# binary treatment, binary? (continuous) and continuous exposure levels
+# treatment probability ~ N2, marginal treatment prob ~ N
+
+# this version is based on Z, G being considered bivarate exposure to unit i
+# gps estimation assumes bivariate Normal distribution for the joint density 
+# and Normal distribution for the marginal density of Z and G.
+# In our case, Z is binary G can be continuous, modification is needed.
+# the following is for Z and G as two continuous exposures
+
+# input
+# tr          col vector of individual level binary treatments, numeric
+# covar       dataframe/matrix of covariates
+# A           spatial network A_ji, in the form of adjacency matrix or distance matrix 
+# Atype       type of A, "dist" or "adj", 
+#             A does not have to be symmetric. If directed, j in row index
+# pstype      / 
+# pred_model  "lm" other options...?
+# ps          return list of joint and marginal ps
+
+get_gps2 <- function(tr,
+                    covar,
+                    A,
+                    Atype="dist",
+                    pred_model="lm"){
+  # check args insert code here
+  
+  # format treatment and covariates
+  n<-length(tr)
   if (Atype=="dist") {
     # define treatment levels tl based on tr and A, stratified to 4 treatment levels
     A0 <- A
     diag(A0) <-1
     A0 <- A^(-1)
     diag(A0) <- 0
-    A0 <- A0/rowSums(A0) # row std inverse dist, can try other dist decay func
-    trnei <- rowSums(replicate(n,tr)*A0) # neighbor treatment level [0,1]
-    trnei <- ifelse(trnei>0.5,1,0) # neighbor treatment {0,1}, 0.5 is arbitrary here
-    tl <- paste0(tr,trnei) # treatment level, multinomial
-    # alternatively tl can be ordinal/continuous, can be a vec of length 2 not sure how it works yet...
-    
+    A0 <- A0/rowSums(A0) # row std inverse dist, can try other dist decay
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE))*A0) # neighbor treatment level
     # construct neighborhood covariates, the average of neighbors
     k <- ncol(covar) # num of covariates
     covnei <- list()
      for i in (1:k) {
-      covnei[[i]] <- rowSums(replicate(n,covar[,i])*A0)
+      covnei[[i]] <- rowSums(matrix(covar[,i],nrow=n,ncol=n,byrow=TRUE))*A0)
     }
     covnei <- as.data.frame(do.call(cbind,covnei))
-    covar0 <- cbind.data.frame(covar,covnei)
   }
-  
   if (Atype=="adj") {
-    # the adjacency matrix can be simply geo contiguity or otherwise defined
-    # assume A is unweighted (if directed, j should be in the row names)
     # define treatment levels tl
     A0 <- A
     A0 <- A0/rowSums(A0) # row std 
-    trnei <- rowSums(replicate(n,tr)*A0)
-    trnei <- ifelse(trnei>0.5,1,0)
-    tl <- paste0(tr,trnei)
-    
-    # construct neighborhood covariates, neighborhood means and network properties
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE))*A0)
+    # construct neighborhood covariates, first order neighborhood means and network properties
     k <- ncol(covar)
     covnei <- list()
     for i in (1:k) {
-      covnei[[i]] <- rowSums(replicate(n,covar[,i])*A0)
+      covnei[[i]] <- rowSums(matrix(covar[,i],nrow=n,ncol=n,byrow=TRUE))*A0)
     }
     covnei <- as.data.frame(do.call(cbind,covnei))
     netA <- igraph::graph_from_adjacency_matrix(A,mode="undirected",weighted=FALSE)
-    btwnss <- betweenness(netA, weights = NA) # can try other metrics
-    covar0 <- cbind.data.frame(covar,covnei,btwnss)
+    dgr <- rowSums(A) # the node degrees
+    btwnss <- betweenness(netA, weights = NA) # betweeness centrality
+    covnei <- cbind.data.frame(covnei,dgr,btwnss)
   }
- 
-   
+
   # fit treatment model and estimate propensity scores
-  if (pstype=="joint"){
-    if (pred_model=="multinom"){stop('nnet multinom currently not supported.')
-         #pred0 <- nnet::multinom(x=covar0,y=tl) # nnet accepts formula, needs formatting
-         #ps <- as.matrix(nnet::predict.nnet(pred0,newdata=data0))
-    }
-    if (pred_model=="xgboost"){
-         pred0 <- xgboost::xgboost(data=covar0,label=tl) # data in matrix 
-         ps <- as.matrix(predict(pred0,newdata=data0))
-    }
-    if (pred_model=="binomial"){stop('Joint ps cannot be estimated with binomial model.')}
+  if (pred_model=="lm"){
+    # p(Z|X_z,G)
+    T_1<-lm(x=c(covar,trnei),y=tr)
+    T_1_beta<-coef(T_1)
+    T_1_Xb<-model.matrix(T_1)%*%T_1_beta
+    T_1_sigma <- summary(T_1)$sigma
+    gps_z<-dnorm(tr, mean=T_1_Xb, sd=T_1_sigma)
+    # p(G|X_g)
+    T_2<-lm(x=covnei,y=trnei)
+    T_2_beta<-coef(T_2)
+    T_2_Xb<-model.matrix(T_2)%*%T_2_beta
+    T_2_sigma <- summary(T_2)$sigma
+    gps_g<-dnorm(trnei, mean=T_2_Xb, sd=T_2_sigma) 
+    gps_j<-gps_z*gps_g 
   }
-  
-  if (pstype=="conditional"){
-    # by default use pred_model=="binom"
-    # tr numeric
-    data0=cbind.data.frame(covar0,trnei)
-    if (pred_model=="xgboost"){
-         pred0 <- xgboost::xgboost(data=data0,label=tr) 
-         ps <- as.matrix(predict(pred0,newdata=data0))
-    }
-    else{
-         pred0 <- glm.fit(x=data0,y=tr,family="binomial")
-         std <- pred0$sigma 
-         pred <- pred0$fitted.values
-         ps <- dnorm(tr,mean=pred,sd=std) 
-    }    
-  }
-  
-  # return the estimated propensity score
+  ps<-list(gps_j,gps_z,gps_g)
   return(ps)
 }
 ```
+
 
 
 ## Introduce GPS to weighted conformal prediction to obtain counterfactuals. 
@@ -172,80 +300,86 @@ get_gps <- function(tr,
 The generalised propensity restores the ignorability and SUTVA assumptions underpinning classic PO framework. In the case of non-trivial spatial interference, we try to estimate the total effect $Y_{i}(Z_{i}=1,G_{-i}=1)-Y_{i}(Z_{i}=0,G_{-i}=0)$ , direct effect $Y_{i}(Z_{i}=1,G_{-i}=0)-Y_{i}(Z_{i}=0,G_{-i}=0)$ and spillover effect $Y_{i}(Z_{i}=0,G_{-i}=1)-Y_{i}(Z_{i}=0,G_{-i}=0)$.
 
 ref: 
-Lei, L. & Candes, E. (2021) Conformal Inference of Counterfactuals and Individual Treatment Effects. arXiv:2006.06138v2 https://github.com/zhimeir/cfsensitivity
+Lei (2021)
+https://github.com/lihualei71/cfcausal
 
+Tibshirani(2019)
+https://github.com/ryantibs/conformal/tree/master/tibshirani2019
+https://github.com/ryantibs/conformal/tree/master/conformalInference
+
+Candes(2022)
+https://rinafb.github.io/code/nonexchangeable_conformal.zip.
+
+standard conformal inference is based on conditional mean estimation.
 
 ```{r utils, include=FALSE, eval=FALSE}
 source("utils.R", local = knitr::knit_global())
 #  imports conformalScore, gen_cv_ids, weightedConformalCutoff, RF, quantRF, Boosting
 ```
 
-## generic weighted split conformal (Tibshirani, 2019)
+
+### generic weighted split conformal (adapted form Tibshirani, 2019)
 splits data into training and val sets. The weighting across training and test sets provides robustness against distribution shift. The weighting can be exploited to make counterfactual predictions, as Lei et.al. (2021) has demonstarted.
 
-
 ```{r conformalSplit}
+# conformalSplit() is the base prediction function
 
 # X, Y
-# outfun
+# testid     testing point index.
+# outfun    function for predicting Y
 # outparams (if CQR quantiles should be part of outparams, not necessary for mean estimation)
-# wtfun
-# alpha
+# wt        gps weights already calculated at conformal_ITE() and passed in
+# alpha     coverage 
 # trainprop
-# trainid
-# Xtest testing covariates.
-# output prediction interval
+# trainid   
 
-conformalSplit <- functon(X, Y, Xtest,
-                           outfun, outparams,
-                           wtfun,
-                           alpha=0.1,
-                           trainprop=0.6, trainid){
-  # type="mean"
-  # side=two sided
-  # null is equal weights
-  if (is.null(wtfun)){ wtfun <- function(X){ rep(1, nrow(X))}}
-  
+# output prediction intervals
+# cf type="mean", CI two sided
+
+conformalSplit <- functon(X, Y, testid,
+                          outfun, outparams,
+                          wt,
+                          trainid,
+                          alpha=0.1,
+                          trainprop=0.6){
   # subset training data and val data
-  n <- length(Y)
-  if (is.null(trainid)){trainid <- sample(n, floor(n * trainprop))}
   Xtrain <- X[trainid, ,drop=FALSE]
   Ytrain <- Y[trainid]
   Xval <- X[-trainid, ,drop=FALSE]
   Yval <- Y[-trainid]
-  # prep outfun
+  wt_val <- wt[-trainid]
+  wt_test <- wt[testid]
+  Xtest<-X[testid]
+  
   outparams <- c(list(Y = Ytrain, X = Xtrain), outparams)
   Ymodel <- function(X){do.call(outfun, c(outparams, list(Xtest = X)))}
-  # get Yhat mean estimate of Yval and residuals
+  
   Yhat <- Ymodel(Xval)
   Yscore <- conformalScore(Yval, Yhat)
-  wt <- wtfun(Xval)
-  # get Yhat_test mean estimate of the targets Ytest
-  Yhat_test <- Ymodel(Xtest)
-  wt_test <- wtfun(Xtest)
-  # prep weights
-  avg_wt <- mean(c(wt, wt_test))
+  Ytest_hat <- Ymodel(Xtest)
+  
+  avg_wt <- mean(c(wt_val, wt_test))
   wthigh <- 20 
   wtlow <- 0.05
-  wt <- censoring(wt/avg_wt, wthigh, wtlow)
+  wt_val <- censoring(wt_val/avg_wt, wthigh, wtlow)
   wt_test <- censoring(wt_test/avg_wt, wthigh, wtlow)
-  totw <- sum(wt)
-  wt <- wt / totw
-  # get Yslack
+  totw <- sum(wt_val)
+  wt_val <- wt_val / totw
+  
   qt <- (1 + wt_test / totw) * (1 - alpha) # quantile 1-alpha
-  qt <- pmin(qt, 1) # cap quantile at 1
-  Yslack <- weightedConformalCutoff(Yscore, wt, qt) # find score(residual) at given qt
-  # from mean estimate to intervals
-  Ylo <- Yhat_test - Yslack
-  Yup <- Yhat_test + Yslack
-  # output prediction interval
+  qt <- pmin(qt, 1) 
+  Yslack <- weightedConformalCutoff(Yscore, wt_val, qt) # find score(residual) at given qt
+  
+  Ylo <- Ytest_hat - Yslack
+  Yup <- Ytest_hat + Yslack
+  
   out <- data.frame(lower = Ylo, upper = Yup)
   return(out)
 }
 ```
 
 
-## counterfactual prediction with ps weighted conformal
+### counterfactual prediction with ps weighted split conformal, binary treatment (adapted from Lei, 2021)
 
 Counterfactual conformal prediction is an extension of generic conformal prediction. It is an application of weighted confomal prediction.  The main feature of counterfactual conformal prediction is the introduction of propensity scores e(x) for the weighting. The ps weighted conformal inference is in spirit similar to IPW. In the IPW estimators, the weights calibrate the observed covariate distribution to the target one.  Similarly, in counterfactual conformal prediction, the weighting addresses the covariate distribution shift between treatment and control groups (i.e. the sampling and target population when fitting model on treatment group observations and make counterfactual prediction on control group individuals).
 
@@ -253,59 +387,150 @@ For counterfactual inference on Y(1), use 1/e(x) as weights; for Y(0), use 1/(1-
 
 The estimation procedure has lovely doubly robust properties.
 
-### counterfactual prediction with ps weighted split conformal, binary treatment (Lei, 2021) 
 ```{r conformalCf_split}
+# conformalCf_split() formats data and params, pass them to conformalSplit() to predict counterfactuals
+
 # X, Y
-# type="mean"
-# side=two sided
-# outfun
-# outparams
-# psfun       to be feed into conformalSplit() as wtfun
-# psparams
-# trainprop
+# testid      the index of data point to do prediction on, single point
+# tl          vector of exposure levels
+# A           spatial network A_ji, in the form of adjacency matrix or distance matrix 
+# Atype       type of A, "dist" or "adj", 
+# ps_pred_model passed to conformalSplit()
+# outfun      passed to conformalSplit()
+# outparams   passed to conformalSplit()
+# wt          passed to conformalSplit()
+# trainid     interface to other sampling methods (spatial).
 
-conformalCf_split <- function(X, Y,
+conformalCf_split <- function(X, Y, 
+                              testid,
+                              tl,
                               outfun, outparams,
-                              psfun, psparams,
-                              trainprop=0.6){
-    
-    T <- as.numeric(!is.na(Y))
-    inds1 <- which(T == 1)
-    inds0 <- which(T == 0)
-    n1 <- length(inds1)
-    n0 <- length(inds0)
-    trainid1 <- sample(n1, floor(n1 * trainprop))
-    trainid0 <- sample(n0, floor(n0 * trainprop))
-    trainid <- c(inds1[trainid1], inds0[trainid0])
-    Xtrain <- X[trainid, ,drop=FALSE]
-    Ttrain <- T[trainid]
-
-    psparams0 <- psparams
-    psparams <- c(list(Y = Ttrain, X = Xtrain), psparams0)
-    wtfun <- function(X){
-        ps <- do.call(psfun, c(list(Xtest = X), psparams))
-        1 / ps
+                              wt,trainid){
+  trainprop<-0.6
+  
+  inds00 <- which(tl == "t00")
+  inds01 <- which(tl == "t01")
+  inds10 <- which(tl == "t10")  
+  inds11 <- which(tl == "t11")
+  inds<-list(inds00,inds01,inds10,inds11)
+  
+  # parse index
+  ps<-1/ps
+  
+  n0<-x0<-y0<-ps0<-out0<-list()
+  if (!is.null(trainid)){
+    trainid0<-trainid
+  } else { trainid0<-list()}
+  
+  for (i in 1:4){
+    n0[i]<-length(inds[i])
+    if (is.null(trainid)){
+      trainid0[i]<- sample(n0[i], floor(n0[i] * trainprop))
     }
-
-    X <- X[inds1, ,drop=FALSE]
-    Y <- Y[inds1]
-    out <- conformalSplit(X, Y,
-                          outfun, outparams,
-                          wtfun,
-                          trainprop, trainid1)
-    return(out)
+    x0[i] <- X[inds[i], ,drop=FALSE]
+    Y0[i] <- Y[inds[i]]
+    ps0[i]<- ps[inds[i]]
+    out0[i] <- conformalSplit(x0[i], Y0[i], testid,outfun, outparams,ps0[i],trainid0[i])
+  } 
+  
+  tltest<-tl[testid]
+  if(tltest=="t00"){
+    out<- list(Y[testid],out0[2],out0[3],out0[4])
+  } if(tltest=="t01"){
+    out<- list(out0[1],Y[testid],out0[3],out0[4])
+  } if(tltest=="t10"){
+    out<- list(out0[1],out0[2],Y[testid],out0[4])
+  } else if (tltest=="t11"){
+    out<- list(out0[1],out0[2],out0[3],Y[testid])
+  }
+  return(out)
 }
 
 ```
 
 
-### weighted split conformal + location weights. (new)
+### ITE prediction with ps weighted split conformal. Under spatial interference, binary treatment. (new)
 
-Doable: To handle non-exchangeability in spatial datasets, higher weights are given to local samples.
+Here we apply our causal effects estimands (with bianry treatment, four levels of exposure) and associated gps weights. 
+
+Should be careful what average ITE means though. The neighborhood treatment level (i.e. the local spatial interference pattern) always depends on where the ego unit is located in the spatial network, how informative is averaging over it?
+
+```{r ITE_version1}
+# conformal_ITE1() is the outer func that constructs ITE from Y_obs and counterfactuals
+
+# X, Y
+# testid      the index of data point to do inference on, single point atm.
+# tr          vector of individual binary treatments, numeric.
+# A           spatial network A_ji, in the form of adjacency matrix or distance matrix. 
+# Atype       type of A, "dist" or "adj".
+# ps_pred_model 
+# outfun      passed to conformalSplit()
+# outparams   passed to conformalSplit()
+# output      ITEs and average ITEs over marginal treatment propensities.
+
+conformal_ITE1 <- function(X, Y, testid,
+                          tr,
+                          A, typeA,
+                          ps_pred_model="binomial",
+                          outfun, outparams,
+                          ){
+  # use psfun="get_gps1"
+  
+  ITE<-list()
+  n <- length(Y)
+ 
+  # compute joint and marginal propensity scores
+  # ps are used here to calculate ITEs, and passed on to conformalSplit() as weights
+  ps<-get_gps1(tr,covar,A,Atype,pstype="joint",ps_pred_model="binomial") # dataframe n*6
+  
+  # compute counterfactuals
+  trnei<-get_trnei1(tr,A,typeA)
+  tl <- paste0("t",tr,trnei)
+  tls <-c("t00","t01","t10","t11")
+  Ztest <- tr[testid]
+  Gtest <- trnei[testid]
+  tltest <- paste0("t",Ztest,Gtest)
+  
+  Cf_params<-c(X,Y,testid,tl,outfun,outparams,wt=ps)
+  PO <- list()
+  for (i in 1:4){
+    if (tls[i]!=tltest){
+     PO[i]<- do.call(conformalCf_split,Cf_params)
+   } else { PO[i]=Y[testid]}
+  }
+  colnames(as.data.frame(PO))<-c("t00","t01","t10","t11")
+  
+  # compute ITEs
+  ITE<-data.frame(PO$t11-PO$t10,PO$t01-PO$t00,PO$t11-PO$t01,PO$t10-PO$t00)
+  colnames(ITE)<-c("spill1","spill0","direct1","direct0")
+  # average ITE over point testid's marginal treatment propensities
+  ITE$spill_avg<-ITE$spill1/(ps$z[testid])+ITE$spill0/(1-ps$z[testid])
+  ITE$direct_avg<-ITE$direct1/(ps$g[testid])+ITE$direct0/(1-ps$g[testid]) 
+    
+  # insert code here, check results
+  return (ITE)
+}
+```
 
 
-```{r location_weights}
-# create location weights
+### ITE prediction with ps weighted split conformal. Under spatial interference, continuous treatment(s). (new)
+
+More generally, the procedure can be extended to continuous exposure levels. To implement, neighborhood treatment levels [0,1] are discretized to intervals of 0.01. counterfactuals are predicted for each level. 
+
+This version takes longer to run since the target is dose-response curve. Rationale for using this may be robustness against distribution shift and non-stationarity. But it is unclear how significant the advantage is. Parametric models may actually be a better option for continuous treatments.
+
+```{r ITE_version2}
+# conformal_ITE2() constructs ITE / dose-response curves from observed outcome and predicted
+
+```
+
+
+## Refinement1: non-exchangeabilitya and adjustments. (new)
+
+Doable: To handle non-exchangeability in spatial datasets, higher weights are given to local samples, ref Candes 2022. Not exactly doable: Chernozhukov 2018, time series data points are divided into blocks, in each block, an autoregressive model is fitted to estimate Y and obtain residuals; the residual vector then produce a conformity score. The block slides through the times series (the data permutes by cyclic sliding).
+
+```{r get_w_ids}
+# creates train id for conformalSplit()
 
 # for given ocation s0, the nearest m support points (by some distance measure, most commonly geo distance) are given higher weights to base the conformal prediction on
 # this dist info is already supplied in the A matrix we used for obtaining gps
@@ -315,10 +540,12 @@ Doable: To handle non-exchangeability in spatial datasets, higher weights are gi
 
 
 ```{python CP_LS}
-# ref Candes 2022  conformal prediction with least squares
+# ref Candes 2022 
+# conformal prediction with weighted least squares
 
+# the func seems to be for a single test point x, for which the weights w(x,Z_tr) are supplied. Scale it to a list of X and their weights?
 def CP_LS(X,Y,x,alpha,weights=[],tags=[]):
-    # weights are used for computing quantiles for the prediction interval
+    # weights w(X_i,Z_tr) are used for computing quantiles for the prediction interval 
     # tags are used as weights in weighted least squares regression
     n = len(Y)
     
@@ -341,6 +568,7 @@ def CP_LS(X,Y,x,alpha,weights=[],tags=[]):
     # if we run weighted least squares on (X[1,],Y[1]),...(X[n,],Y[n]),(x,y)
     # then a + b*y = residuals of data points 1,..,n
     # and a1 + b1*y = residual of data point n+1
+    
     y_knots = np.sort(np.unique(np.r_[((a-a1)/(b1-b)),((-a-a1)/(b1+b))]))
     y_inds_keep = np.where( ((np.abs(np.outer(a1+b1*y_knots,np.ones(n))) > \
        np.abs(np.outer(np.ones(len(y_knots)),a)+np.outer(y_knots,b))) *\
@@ -352,27 +580,42 @@ def CP_LS(X,Y,x,alpha,weights=[],tags=[]):
 ```
 
 
-### counterfactual prediction with ps weighted split conformal + location weights. Binary treatment. (new)
-```{r}
 
-```
+## Refinement2: Cross validation 
 
-
-### counterfactual prediction with ps weighted split conformal, local sampling. Under spatial interference, multiple levels of treatment. (new)
-
-For this, we apply our definition of causal effects (total, direct, spillover) and associated generalised propensity score weights. For simplicity, we start with stratified treatment levels. It can be extended to continuous exposure levels.
-
-```{r}
-
-```
-
-
-## Cross validation 
-
-### generic weighted conformal with CV (Tibshirani, 2019; Lei, 2021)
+### generic weighted conformal with CV (adapted from Tibshirani, 2019; Lei, 2021)
 In the following 2 code chunks, for each of the folds, the generic split weighted conformal procedure defined earlier is carried out. Computation wise, using CV is more efficient than the traditional split conformal. 
+```{r get_cv_ids}
+# Generate a list of indices for cross-validation
+get_cv_ids <- function(n, nfolds, offset = 0){
+    ids <- sample(n, n)
+    quo <- floor(n / nfolds)
+    if (quo == 0){
+        idlist <- lapply(1:nfolds, function(i){
+            if (i <= n){
+                i
+            } else {
+                numeric(0)
+            }
+        })
+    } else {
+        resid <- n - quo * nfolds
+        idlist <- lapply(1:nfolds, function(i){
+            tmp <- (i - 1) * quo + 1:quo
+            if (i <= resid){
+                tmp <- c(tmp, quo * nfolds + i)
+            }
+            return(ids[tmp] + offset)
+        })
+    }
+    return(idlist)
+}
+```
+
 
 ```{r conformalCV}
+# conformalCV() is a variation from conformalSplit() , adding CV
+
 # X, Y
 # outfun
 # outparams (if CQR quantiles should be part of outparams, not necessary for mean estimation)
@@ -383,21 +626,11 @@ In the following 2 code chunks, for each of the folds, the generic split weighte
 # Xtest testing covariates.
 # output prediction interval
 
-# gen_cv_ids() in utils.R
-
 conformalCV <- function(X, Y, Xtest,
                         outfun, outparams,
-                        wtfun,
+                        wt,
                         alpha=0.1,
                         nfolds, idlist){
-  # type="mean"
-  # side=two sided
-  # null is equal weights
-
-  if (is.null(wtfun)){
-      wtfun <- lapply(1:nfolds, function(k){function(X){rep(1, nrow(X))}})
-  }
-  # wtfun0 <- wtfun  
   outparams0 <- outparams
   
   # generate trainid list
@@ -406,24 +639,24 @@ conformalCV <- function(X, Y, Xtest,
   
   temp <- list()
   for (k in 1:nfolds){
-      # subset training data and val data inside each fold
+
       testid <- idlist[[k]]
       Xtrain <- X[-testid, ,drop=FALSE]
       Ytrain <- Y[-testid]
       Xval <- X[testid, ,drop=FALSE]
       Yval <- Y[testid]
-      # prep outfun
+
       outparams <- c(list(Y = Ytrain, X = Xtrain), outparams0)
       Ymodel <- function(X){ do.call(outfun, c(outparams, list(Xtest = X)))}
-      # get Yhat mean estimate of Yval and residuals
+
       Yhat <- Ymodel(Xval)
       Yscore <- conformalScore(Yval, Yhat)
-      wt <- wtfun[[k]](Xval)
-      # get Yhat_test mean estimate of the targets Ytest
+      wt <- wt[[k]][-testid]
+
       Yhat_test <- Ymodel(Xtest)
       
       wt_test <- wtfun[[k]](Xtest)
-      # prep weights
+
       avg_wt <- mean(c(wt, wt_test))
       wthigh <- 20 
       wtlow <- 0.05
@@ -431,11 +664,11 @@ conformalCV <- function(X, Y, Xtest,
       wt_test <- censoring(wt_test/avg_wt, wthigh, wtlow)
       totw <- sum(wt)
       wt <- wt / totw
-      # get Yslack
-      qt <- (1 + wt_test / totw) * (1 - alpha) # quantile 1-alpha
-      qt <- pmin(qt, 1) # cap quantile at 1
-      Yslack <- weightedConformalCutoff(Yscore, wt, qt) # find score(residual) at given qt
-      # from mean estimate to intervals
+
+      qt <- (1 + wt_test / totw) * (1 - alpha)
+      qt <- pmin(qt, 1) 
+      Yslack <- weightedConformalCutoff(Yscore, wt, qt) 
+
       Ylo <- Yhat_test - Yslack
       Yup <- Yhat_test + Yslack
 
@@ -443,14 +676,14 @@ conformalCV <- function(X, Y, Xtest,
     
   }
   
-  out <- do.call("rbind",temp) # not exactly right, needs to take average
+  out <- do.call("rbind",temp) # not exactly right
   
   return(out)
 }
   
 ```
 
-### generic weighted conformal with k-fold spatial CV (adapted)
+### generic weighted conformal with k-fold spatial CV (new)
 
 Is spatial CV necessary?
 
@@ -466,6 +699,7 @@ The samples within each CV blocks may or may not satisfy approximate exchangeabi
 ```{r get_spacv_ids}
 # Generate a list of indices for spatial cross validation
 # modified version of gen_cv_ids()
+
 # takes distance matrix/ sparse adjacency matrix A as input
 # spectral clustering on the matrix to create spatial folds
 
@@ -477,7 +711,7 @@ gen_spacv_ids <- function(n,nfolds, A, typeA="adj"){
   if (typeA=="adj") {
     # netA <- igraph::graph_from_adjacency_matrix(A,mode="undirected",weighted=FALSE)
     # clu <- cluster_walktrap(netA) 
-    clu <- greed::spectral(A,nfolds) # return vec of group membership
+    clu <- spectral(A,nfolds) # return vec of group membership
   } else if (typeA=="dist") {
     # clu <- adjclust::adjClust(A,type="dissimilarity",h=1000) # returns a tree
     # dependency on sparseMatrixStats? requires sparse matrix?
@@ -491,14 +725,13 @@ gen_spacv_ids <- function(n,nfolds, A, typeA="adj"){
   for (i in 1:nfolds) {idlist[[i]]<-t$idx[which(t$clu==i),]}
   
   # need to regularize sizes of clusters!!!
+  # check list sizes
+  print(paste("The number of samples in each fold:",lengths(idlist)))
   
   return(idlist)
 }
 ```
 
-### ps weighted conformal with k-fold spatial CV 
-```{r}
 
-```
-
+Refinement 1 and refinement 2 can be incorporated into the GPS conformal ITE prediction procedure.
 

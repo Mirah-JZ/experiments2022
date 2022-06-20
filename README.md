@@ -6,6 +6,8 @@ Documents replication of relevant papers and experiments for the dissertation pr
 # Methods refs. 
 Forastiere, L., Airoldi, E. M., & Mealli, F. (2021). Identification and estimation of treatment and interference effects in observational studies on networks. Journal of the American Statistical Association, 116(534), 901-918.  
 
+Tibshirani, R. J., et.al. (2019). Conformal prediction under covariate shift. Advances in neural information processing systems, 32. https://github.com/ryantibs/conformal/tree/master/tibshirani2019  
+
 Lei, L. & Candes, E. (2021) Conformal Inference of Counterfactuals and Individual Treatment Effects. arXiv:2006.06138v2  
 https://github.com/lihualei71/cfcausal  
 

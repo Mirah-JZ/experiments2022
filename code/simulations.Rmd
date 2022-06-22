@@ -9,91 +9,256 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Demonstration of spatial conformal with gps on simulated data
+# Generating non-spatial data
 
-```{r , eval=FALSE}
-
-```
-
-The covariates $X_{ij}$ are i.i.d. generated from $\mathrm{Unif}([0, 1])$ 
-
-$Y_{i}(0)\equiv 0$
-$\mathbb{E}[Y_{i}(1) \mid X_{i}] = f(X_{i1})f(X_{i2})$ 
-where
-$$f(x) = \frac{2}{1 + \exp(-12(x - 0.5))}$$
-$Y_{i}(1) = \mathbb{E}[Y_{i}(1) \mid X_{i}] + \epsilon_{i}$
-where $\epsilon_{i}\stackrel{i.i.d.}{\sim}N(0, 1)$. 
-
-The propensity score $e(x) \triangleq P(T_{i} = 1\mid X_{i} = x)$ is set as follows:
-$$e(x) = \frac{1}{4}(1 + \beta_{2, 4}(x),$$
-where $\beta_{2, 4}(x)$ is the cdf of the Beta-distribution with parameters $2$ and $4$.
-
-The outcome variable `Y` used by `conformalCf` should be a mixture of observed values and missing values while the covariate matrix `X` should have no missing values. It can handle general missing value problems with ignorable missing mechanisms. The inference of counterfactuals under the potential outcome framework with ignorable treatment assignment is thus a special case. 
-
-```{r do not run, include=FALSE, eval=FALSE}
-set.seed(123)
-genY <- function(X){
-    2 / (1 + exp(-12 * (X[, 1] - 0.5))) * 2 / (1 + exp(-12 * (X[, 2] - 0.5))) + rnorm(n)
-}
-n <- 1000
-d <- 10
-X <- matrix(runif(n * d), nrow = n, ncol = d)
-Y <- genY(X)
-ps <- (1 + pbeta(X[, 1], 2, 4)) / 4
-T <- as.numeric(ps < runif(n))
-Y[!T] <- NA
-summary(Y)
-```
-
-
-```{r demon setup, include=TRUE, eval=FALSE}
-# CF for counterfactuals
-# Generate data
+To assess method performance, linear/ non-linear causal processes are demonstrated.
+ 
+## linear
+```{r data_ns_1 }
+# non-spatial data, 
+# linear treatment effect.
 set.seed(123)
 n <- 1000
 d <- 5
-X <- matrix(rnorm(n * d), nrow = n) # 1000*5
-beta <- rep(1, 5)
+X_ns_1 <- matrix(rnorm(n * d), nrow = n) 
+beta_ns_1 <- rep(1, 5)
+Y1_ns_1 <- X_ns_1 %*% beta_ns_1 + rnorm(n)
+Y0_ns_1 <- rnorm(n)
+ps_ns_1 <- pnorm(X_ns_1[, 1]) 
+T_ns_1 <- as.numeric(ps_ns_1 > runif(n)) 
+Y_ns_1 <- ifelse(T_ns_1 == 1, Y1_ns_1, Y0_ns_1)
+```
 
-# Y with missing vals
-Y2 <- X %*% beta + rnorm(n) # 1000*1
-missing_prob <- pnorm(X[, 1]) 
-if_missing <- missing_prob < runif(n) 
-Y2[if_missing] <- NA
-sum(is.na(Y2)) 
+## non linear
+The covariates $X_{ij}$ are i.i.d. generated from $\mathrm{Unif}([0, 1])$ , $Y_{i}(0)=\epsilon_{i}$, $\mathbb{E}[Y_{i}(1) \mid X_{i}] = f(X_{i1})f(X_{i2})$ , where $f(x) = \frac{2}{1 + \exp(-12(x - 0.5))}$. $Y_{i}(1) = \mathbb{E}[Y_{i}(1) \mid X_{i}] + \epsilon_{i}$ where $\epsilon_{i}\stackrel{i.i.d.}{\sim}N(0, 1)$. 
 
-# Y with random treatment
-Y1 <- X %*% beta + rnorm(n)
-Y0 <- rnorm(n)
-ps <- pnorm(X[, 1]) # propensity
-T <- as.numeric(ps < runif(n))
-Y <- ifelse(T == 1, Y1, Y0)
+The propensity score $e(x)=P(T_{i} = 1\mid X_{i} = x)$ is set as $e(x) = \frac{1}{4}(1 + \beta_{2, 4}(x))$ where $\beta_{2, 4}(x)$ is the cdf of the Beta-distribution with parameters 2 and 4.
+```{r data_ns_2}
+# non-spatial data, 
+# non-linear treatment effect.
+set.seed(123)
+n <- 1000
+d <- 5
+X_ns_2 <- matrix(rnorm(n * d), nrow = n) 
+genY_ns_2 <- function(X){
+  2 / (1 + exp(-12 * (X[, 1] - 0.5))) * 2 / (1 + exp(-12 * (X[, 2] - 0.5))) + rnorm(n)
+  }
+Y1_ns_2 <- genY_ns_2(X_ns_2)  
+Y0_ns_2 <- rnorm(n)
+ps_ns_2 <- (1 + pbeta(X_ns_2[, 1], 2, 4)) / 4
+T_ns_2 <- as.numeric(ps_ns_2 > runif(n)) 
+Y_ns_2 <- ifelse(T_ns_2 == 1, Y1_ns_2, Y0_ns_2)
+```
 
-# Generate testing data
-ntest <- 5
-Xtest <- matrix(rnorm(ntest * d), nrow = ntest) # 5*5
+# generating spatial data
+
+several ways to generate spatial data:
+(1) Gaussian spatial process
+(2) randomly assignment spatial locations to the non-spatial data. (i.i.d. data?)
+(3) randomly assignment spatial locations to the non-spatial data, then do spatial smoothing to generate auto-correlation in X.
+
+Also spatial data can be generated as networks.
+
+```{r data_s_1}
+# spatial data
+# linear effect
+X_s_1
+ps_s_1
+Z_s_1
+G_s_1
+T_s_1
+Y1_s_1
+Y0_s_1
 ```
 
 
-```{r demon 1 Cf,  include=TRUE, eval=FALSE}
-# CF for counterfactuals
-
-# Run weighted CQR-CV
-conformalCf_CV(X, Y2, psfun="Boosting", outfun = "quantRF",nfolds=4)
-
+```{r data_s_2}
+# spatial data
+# non-linear effect
+X_s_2
+ps_s_2
+Z_s_2
+G_s_2
+T_s_2
+Y1_s_2
+Y0_s_2
 ```
 
 
-```{r demon 2 ITE,  include=TRUE, eval=FALSE}
-# CF for ITE
+```{r data_s_3}
+# spatial data
+# non-linear effect, spatially non-stationary 
+# Does spatial heterogeneity create problems of spatial confounding???
+X_s_3
+ps_s_3
+Z_s_3
+G_s_3
+T_s_3
+Y1_s_3
+Y0_s_3
+```
 
-# Naive method, CV, 
-CI <- conformalIte(X, Y, T,
-                   psfun="Boosting", outfun = "quantRF",nfolds=4,Xtest=Xtest)
+
+```{r get_A}
+# constructing distance matrix A_dist, and respective adjacency matrix A_adj
+A_dist
+
+A_adj
+```
 
 
-# Counterfactual method, Y and T needs to be observed
+# testing the estimation of GPS
+
+```{r testid}
+# testing point, one index from 1:n
+testid0<- sample(n,1)
+```
 
 
+```{r test1}
+# binary treatment, 4 level exposure, getting GPS
+test1_gps1 <- get_gps1(tr = Z_s_1,
+                    covar = X_s_1,
+                    A = A_dist,
+                    Atype="dist",
+                    pstype="joint",
+                    ps_pred_model="binomial")
+summary(test1_gps1)
+plot(test1_gps1)
+```
+
+
+# Testing standard split conformal prediction
+
+```{r test2,  include=TRUE, eval=FALSE}
+# generate null equal weights, (the equal weight generator has been removed from the function)
+test2_wt
+
+# generate trainid, (the random id generator has been removed from the function)
+test2_trainid
+
+# Run standard plit conformal
+test2_pred <- conformalSplit(X=X_ns_1, Y=X_ns_1, testid=testid0,
+                          outfun="quantRF", 
+                          wt=test2_wt,
+                          trainid=test2_trainid,
+                          alpha=0.1,
+                          trainprop=0.6)
+```
+
+
+# Testing spatial conformal 
+
+## testing the counterfactual prediction
+```{r test3_trainid}
+# generate different trainid, if desired.
+test3_trainid
+
+test4_trainid
+
+test5_trainid
+```
+
+spatial linear
+```{r test3}
+# spatial CF for counterfactual prediciton
+test3_pred<-conformalCf_split(X=X_s_1, Y=Y_s_1, 
+                              testid=testid0,
+                              tl=T_s_1,
+                              outfun="quantRF", 
+                              wt=ps_s_1,trainid=test3_trainid)
+```
+
+spatial non-linear
+```{r test4}
+# spatial CF for counterfactual prediciton
+test4_pred<-conformalCf_split(X=X_s_2, Y=Y_s_2, 
+                              testid=testid0,
+                              tl=T_s_2,
+                              outfun="quantRF", 
+                              wt=ps_s_2,trainid=test5_trainid)
+```
+
+spatial non-linear, non-stationary
+```{r test5}
+# spatial CF for counterfactual prediciton
+test5_pred<-conformalCf_split(X=X_s_3, Y=Y_s_3, 
+                              testid=testid0,
+                              tl=T_s_3,
+                              outfun="quantRF", 
+                              wt=ps_s_3,trainid=test5_trainid)
+```
+
+
+## testing the spatial ITE construction
+
+computing coverage rate
+For computing coverage, experiments are rerun 100 times. Plot the confidence intervals against true value as summary the coverage.
+We compute coverage rates on the main advertised scenarios: 
+test6 (spatial linear) 
+test7 (spatial non-linear) 
+test8 (spatial non-linear non-stationary).
+
+Note that spatial confounding / unmeasured confounding is not covered by the proposed method.
+
+```{r compute_coverage}
+# compute_coverage function is used to repeat certain experiments
+# The function resamples from 1:n to get a testid and run the main fuctions with it.
+# results from the (100) runs are stored for reporting.
+
+# iter            interger [1,500] set the number of times to repeat the eexperiment.
+# experiment_id   which experiment to run, "test6", "test7", "test8"
+
+compute_coverage<-function(X, Y,
+                          tr,
+                          A, typeA,
+                          ps_pred_model="binomial",
+                          outfun, outparams,
+                          iter,
+                          experiment_id){
+  if (runs>100){runs=100}
+  results<-list()
+  n<-length(Y)
+  if (experiment_id="text6"){
+    for (i in 1:runs){
+    testid0<-sample(n,1)
+    results[i]<-conformal_ITE1(X=X_s_1, Y=Y_s_1, 
+                          testid=testid0,
+                          tr=Z_s_1,
+                          A=Adist, typeA="dist",
+                          ps_pred_model="binomial",
+                          outfun="quantRF")
+    }
+  } else if (experiment_id="text7"){
+    for (i in 1:runs){
+    testid0<-sample(n,1)
+    results[i]<-conformal_ITE1(X=X_s_2, Y=Y_s_2, 
+                          testid=testid0,
+                          tr=Z_s_2,
+                          A=Adist, typeA="dist",
+                          ps_pred_model="binomial",
+                          outfun="quantRF")
+    }
+  } else if (experiment_id="text8"){
+    for (i in 1:runs){
+    testid0<-sample(n,1)
+    results[i]<-conformal_ITE1(X=X_s_3, Y=Y_s_3, 
+                          testid=testid0,
+                          tr=Z_s_3,
+                          A=Adist, typeA="dist",
+                          ps_pred_model="binomial",
+                          outfun="quantRF")
+    }
+  }
+ return(results)
+}
+```
+
+
+# plotting spatial conformal outcomes
+
+
+```{r plot1}
+# plotting coverage of expriments
 ```
 

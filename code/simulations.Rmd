@@ -79,6 +79,10 @@ save(Y_ns_2,Y1_ns_2,Y0_ns_2,X_ns_2,T_ns_2,ps_ns_2,file="datans2.Rdata")
 
 # generating network (spatial) data with interference
 
+Spatial network data is generated in the following way: Step 1. n points are randomly sampled from a unit square. All node pairs within distance band r are connected with an edge. r is chosen such that node degree distribution is reasonable. Coordinates of each pointare saved as node attributes. This creates a spatial network. Step 2. data1 or data2 are combined to the network such that each data point is assigned to a spatial point. 
+
+Following this procedure, the X of the units are spatially random with no autocorrelation or spatial dependence. There is no unmeasured spatial confounding, conditional ignorability still holds. Interference is defined according to the spatial network structure, where each unit's outcome is dependent on its first-order neighbors' treatment. Further, non-stationarity can be introduced in several places, for example, in the determining function of Y, in the dependence between neighbors, or in the treatment propensity.
+
 ##  net1. Map data_ns_1 to random network. save potential outcomes.
 ```{r}
 n <- 1000
@@ -232,7 +236,7 @@ save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file
 ```
 
 
-(4) net4. With network autocorrelation. This may affect the conformal prediction. Otherwise it should not make a difference for causal identification, since we assume conditional ignorability.
+(4) net4. With network autocorrelation. This may affect the design of conformal prediction (As long as sampling is random, exchangeability still approximately holds. If there's a spatial pattern in Y, modeling it may help increase outcome prediction accuracy in the face of unmeasured spatial confounding ). Otherwise it should not make a difference for causal identification, since we assume conditional ignorability.
 ```{r}
 
 ```
@@ -242,34 +246,75 @@ save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file
 
 ```{r testid}
 # testing point, one index from 1:n
-testid0<- sample(n,1)
+testid0<- sample(n,1) # 832
 ```
 
 
 ```{r test1}
 # binary treatment, 4 level exposure, getting GPS and test balance
 A<-as.matrix(A_adj)
+
+# glm predictions
 test1_gps1 <- get_gps1(tr = Z_nt_1,covar = X_nt_1,A = A,Atype="adj",
                     pstype="joint",ps_pred_model="binomial")
-# true and estimated p(z=1)
-plot(ps_ns_1,test1_gps1[,5],xlab="True GPS",ylab="Estimated GPS")
-# check balance
+# check p(z=1) 
+hist(test1_gps1[,5]) # should be roughly uniform[0,1]
+plot(ps_ns_1,test1_gps1[,5],xlab="True Z",ylab="Estimated Z") # pretty close
+# check p(g=1)
+# p(g=1) should roughly center around 0.5, because neighborhood assignment and spatial distribution of Z is random.
+hist(test1_gps1[,6]) # a bit flat
+# check gps and balance
+hist(test1_gps1[,1]) # why this shape?
+# nnet::multinom predictions
+test1_gps2 <- get_gps1(tr = Z_nt_1,covar = X_nt_1,A = A,Atype="adj",
+                    pstype="joint",ps_pred_model="multinom")
+plot(test1_gps1[,1],test1_gps2[,1]) # t11, t10 very close. t01 t00 not so much
+check<-data.frame(T_nt_1,test1_gps3) # T predictions only 50% accurate
 
 ```
 
 
 # Testing standard split conformal prediction
 
+```{r utils, include=FALSE, eval=FALSE}
+source("utils.R")
+
+```
+
+
 ```{r test2,  include=TRUE, eval=FALSE}
 # generate null equal weights and random trainid
 test2_wt<-rep(1,n)
 test2_trainid<-sample(n,floor(n*0.6))
-# Run standard plit conformal
-test2_pred <- conformalSplit(X=X_ns_1, Y=X_ns_1, testid=testid0,
-                          outfun="quantRF", 
-                          wt=test2_wt,
+test2Xtest<-as.data.frame(X_ns_1[testid0,,drop=FALSE])
+test2wttest<-1
+#r1<-randomForest(x=X_ns_1, y=Y_ns_1)
+#res <- predict(r1, newdata = X_ns_1)
+#plot(Y_ns_1,res)
+#r2<-grf::quantile_forest(X_ns_1, Y_ns_1,quantiles=c(0.1,0.9))
+#res2 <- predict(r2, X_ns_1,quantiles=c(0.1,0.9))
+#res2 <-res2$predictions
+
+# Mean pred
+test2_pred <- conformalSplit(X=X_ns_1, Y=Y1_ns_1, test2Xtest,test2wttest,
+                          outfun="RF", 
+                          wt=test2_wt,CQR=FALSE,
                           trainid=test2_trainid,
                           alpha=0.1)
+# -5.245218 [-3.468821, -3.466433]
+# -2.179215 [-1.744514, -1.742704]
+# a bit off
+
+# QR
+
+test2_pred <- conformalSplit(X=X_ns_1, Y=Y1_ns_1, test2Xtest,test2wttest,
+                          outfun="QRF", 
+                          wt=test2_wt,CQR=TRUE,
+                          trainid=test2_trainid,
+                          alpha=0.1)
+# 3.558138 [3.832819，	1.205149	]
+# -2.179215 [-0.3682066，	-2.182044]
+# a bit conservative, but covers the true value
 ```
 
 
@@ -277,8 +322,11 @@ test2_pred <- conformalSplit(X=X_ns_1, Y=X_ns_1, testid=testid0,
 
 ## testing the counterfactual prediction
 ```{r test3_trainid}
-test3_trainid <- test4_trainid <- test5_trainid <- test2_trainid
 # generate different trainid, if desired.
+test3_trainid
+test4_trainid
+test5_trainid
+# needs to be list of 4. vaid for subgroup of each tl level.
 ```
 
 
@@ -296,11 +344,25 @@ ps_nt_3 <- get_gps1(tr = Z_nt_3,covar = X_nt_3,A = A,Atype="adj",
 spatial linear
 ```{r test3}
 # spatial CF for counterfactual prediciton
+# trainid generated randomly in each tl level.
+T_nt_1<-paste0("t",T_nt_1)
+# testid0 694
+X_nt_1Xtest <- X_nt_1[694,]
+Y_nt_1Ytest <- Y_nt_1[694]
+t_nt_1tltest <- T_nt_1[694]
+ps_nt_1wttest <- ps_nt_1[694,4]
+
 test3_pred<-conformalCf_split(X=X_nt_1, Y=Y_nt_1, 
-                              testid=testid0,
+                              X_nt_1Xtest,Y_nt_1Ytest,t_nt_1tltest,ps_nt_1wttest,
                               tl=T_nt_1,
-                              outfun="quantRF", 
-                              wt=ps_nt_1,trainid=test3_trainid)
+                              outfun="RF", CQR=FALSE,
+                              ps=ps_nt_1, trainid=NA) 
+
+test3_pred[[1]] # t11 [-0.6797705	-0.5132873]
+test3_pred[[2]] # t10 [-0.2833406	-0.243811]
+test3_pred[[3]] # t01 [0.6533025	0.6595292]
+test3_pred[[4]] # t00 [-0.5793577	-0.5793577] observed
+
 ```
 
 spatial heteroskadestic
@@ -309,8 +371,8 @@ spatial heteroskadestic
 test4_pred<-conformalCf_split(X=X_nt_2, Y=Y_nt_2, 
                               testid=testid0,
                               tl=T_nt_2,
-                              outfun="quantRF", 
-                              wt=ps_nt_2,trainid=test5_trainid)
+                              outfun="RF", CQR=FALSE,
+                              ps=ps_nt_2)
 ```
 
 spatial heteroskadestic, non-stationary
@@ -319,8 +381,8 @@ spatial heteroskadestic, non-stationary
 test5_pred<-conformalCf_split(X=X_nt_3, Y=Y_nt_3, 
                               testid=testid0,
                               tl=T_nt_3,
-                              outfun="quantRF", 
-                              wt=ps_nt_3,trainid=test5_trainid)
+                              outfun="RF", CQR=FALSE,
+                              ps=ps_nt_3)
 ```
 
 
@@ -333,69 +395,63 @@ test6 (spatial linear)
 test7 (spatial heteroskadestic) 
 test8 (spatial heteroskadestic non-stationary).
 
-Note that spatial confounding / unmeasured confounding is not covered by the proposed method.
+To do:
+The functions need to be modified to take a list of prediction point indices.
+
+```{r}
+# test6
+test6_pred1 <-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
+                              testid=testid0,
+                              tr=Z_nt_1,
+                              A=A,Atype="adj",
+                              ps_pred_model="binomial",
+                              outfun="RF", CQR=FALSE)
+# spill1 -0.07336791	0.2483669
+# spill0 0.7462095	0.8746951
+# direct1 0.7625377	-0.5335482		
+# direct0 0.05703968	0.09277987
+```
+
 
 ```{r compute_coverage}
 # compute_coverage function is used to repeat certain experiments
 # The function resamples from 1:n to get a testid and run the main fuctions with it.
 # iter            number of times to repeat the experiment.
-# data_type       "network", "spatial" datasets
+# data_type       index datasets
 # experiment_id   which experiment to run, "test6", "test7", "test8"
 
 compute_coverage<-function(X, Y,
                           tr,
-                          A, typeA,
+                          A, Atype,
                           ps_pred_model="binomial",
                           outfun, outparams,
                           iter,
-                          data_type,
                           experiment_id){
-  if (iter>100){iter=100}
+  if (iter>30){iter=30}
   results<-list()
   n<-length(Y)
-  if (data_type="network"){
-    params<- list(A=A,typeA="adj",ps_pred_model="binomial",outfun="quantRF")
-    if (experiment_id="text6"){
+
+    params<- list(A=A,Atype="adj",ps_pred_model="binomial",outfun="RF")
+    if (experiment_id="test6"){
       for (i in 1:iter){
       testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,c(params,X=X_nt_1, Y=Y_nt_1,testid=testid0,
+      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_1, Y=Y_nt_1,testid=testid0,
                                            tr=Z_nt_1,))
       }
-    } else if (experiment_id="text7"){
+    } else if (experiment_id="test7"){
       for (i in 1:iter){
       testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1.c(params,X=X_nt_2, Y=Y_nt_2,testid=testid0,
+      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_2, Y=Y_nt_2,testid=testid0,
                                            tr=Z_nt_2))
       }
-    } else if (experiment_id="text8"){
+    } else if (experiment_id="test8"){
       for (i in 1:iter){
       testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,c(params,X=X_nt_3, Y=Y_nt_3, testid=testid0,
+      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_3, Y=Y_nt_3, testid=testid0,
                                            tr=Z_nt_3,))
       }
     }
-  } else if (data_type="spatial") {
-    params<- list(A=A_adj,typeA="adj",ps_pred_model="binomial",outfun="quantRF")
-    if (experiment_id="text6"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,c(params,X=X_nt_1, Y=Y_nt_1,testid=testid0,
-                                           tr=Z_nt_1,))
-      }
-    } else if (experiment_id="text7"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1.c(params,X=X_nt_2, Y=Y_nt_2,testid=testid0,
-                                           tr=Z_nt_2))
-      }
-    } else if (experiment_id="text8"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,c(params,X=X_nt_3,Y=Y_nt_3,testid=testid0,
-                                           tr=Z_nt_3,))
-      }
-    }
-  }
+
  return(results)
 }
 ```

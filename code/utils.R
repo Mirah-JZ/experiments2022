@@ -5,8 +5,12 @@
 # conformal score. for conformalCV main func
 # -----------------------------------------------------------------------------
 # residual based conformal score
-conformalScore <- function(Y, Yhat){
-  score <- pmax(Yhat[, 1] - Y, Y - Yhat[, 2])
+conformalScore <- function(Y, Yhat, quantiles){
+  if (quantiles==0) {
+    score <- pmax(Yhat - Y, Y - Yhat) # for mean pred
+  } else {
+    score <- pmax(Yhat[, 1] - Y, Y - Yhat[, 2]) # for CQR
+  }
   return(score)
 }
 
@@ -54,13 +58,10 @@ weightedConformalCutoff <- function(score, weight, qt){
 # -----------------------------------------------------------------------------
 ## wrapper for randomForest::randomForest
 # -----------------------------------------------------------------------------
-RF <- function(Y, X, Xtest, ...){
-  # depending on the class of Y being continuous or binomial
-  # if continuous
-  fit <- randomForest::randomForest(x = X, y = Y, ...)
+RF <- function(Y, X, Xtest){
+  # if Y continuous
+  fit <- randomForest::randomForest(x = X, y = Y)
   res <- predict(fit, newdata = Xtest)
-  res <- as.numeric(res)
-  # can be extended to other cases ...
   return(res)
 }
 
@@ -96,7 +97,7 @@ Boosting <- function(Y, X, Xtest, n.trees = 100){
 }
 
 # -----------------------------------------------------------------------------
-# spectral clustering for spatal CV folds
+# spectral clustering for spatial CV folds
 # -----------------------------------------------------------------------------
 library(RSpectra)
 # ref greed::spectral()
@@ -113,4 +114,25 @@ spectral <- function(X, K) {
   Xpn[rowSums(Xp) == 0, ] <- 0
   km <- kmeans(Xp, K)
   km$cluster
+}
+
+# -----------------------------------------------------------------------------
+# get_trnei1 get neighborhood treatment level
+# -----------------------------------------------------------------------------
+get_trnei1 <- function(tr,A,Atype){
+  if (Atype=="dist"){
+    A0 <- A
+    diag(A0) <-1
+    A0 <- A^(-1)
+    diag(A0) <- 0
+    A0 <- A0/rowSums(A0) 
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE)*A0) 
+    trnei <- ifelse(trnei>0.5,1,0)
+  } else if (Atype=="adj") {
+    A0 <- A
+    A0 <- A0/rowSums(A0) 
+    trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE)*A0)
+    trnei <- ifelse(trnei>0.5,1,0)
+  }
+  return(trnei)
 }

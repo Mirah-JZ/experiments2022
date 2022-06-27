@@ -347,15 +347,15 @@ spatial linear
 # trainid generated randomly in each tl level.
 T_nt_1<-paste0("t",T_nt_1)
 # testid0 694
-X_nt_1Xtest <- X_nt_1[694,]
+X_nt_1Xtest <- X_nt_1[694, ,drop=FALSE]
 Y_nt_1Ytest <- Y_nt_1[694]
 t_nt_1tltest <- T_nt_1[694]
 ps_nt_1wttest <- ps_nt_1[694,4]
 
-test3_pred<-conformalCf_split(X=X_nt_1, Y=Y_nt_1, 
+test3_pred <- conformalCf_split(X=X_nt_1, Y=Y_nt_1, 
                               X_nt_1Xtest,Y_nt_1Ytest,t_nt_1tltest,ps_nt_1wttest,
                               tl=T_nt_1,
-                              outfun="RF", CQR=FALSE,
+                              outfun="QRF", CQR=TRUE,
                               ps=ps_nt_1, trainid=NA) 
 
 test3_pred[[1]] # t11 [-0.6797705	-0.5132873]
@@ -406,54 +406,23 @@ test6_pred1 <-conformal_ITE1(X=X_nt_1, Y=Y_nt_1,
                               A=A,Atype="adj",
                               ps_pred_model="binomial",
                               outfun="RF", CQR=FALSE)
-# spill1 -0.07336791	0.2483669
-# spill0 0.7462095	0.8746951
-# direct1 0.7625377	-0.5335482		
-# direct0 0.05703968	0.09277987
+
+# 0.02132532  0.1454363  1.320327  1.36071  -1.814676  -1.662121  -0.4872306  -0.475291
 ```
 
 
 ```{r compute_coverage}
-# compute_coverage function is used to repeat certain experiments
-# The function resamples from 1:n to get a testid and run the main fuctions with it.
-# iter            number of times to repeat the experiment.
-# data_type       index datasets
-# experiment_id   which experiment to run, "test6", "test7", "test8"
+# repeated experiments via feeding a list of testid to the function
+# either the Ymodel is only fitted once and a list of testid are fed to the model, 
+# or the Ymodel is fitted agian each time a new test point is supplied.
 
-compute_coverage<-function(X, Y,
-                          tr,
-                          A, Atype,
-                          ps_pred_model="binomial",
-                          outfun, outparams,
-                          iter,
-                          experiment_id){
-  if (iter>30){iter=30}
-  results<-list()
-  n<-length(Y)
-
-    params<- list(A=A,Atype="adj",ps_pred_model="binomial",outfun="RF")
-    if (experiment_id="test6"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_1, Y=Y_nt_1,testid=testid0,
-                                           tr=Z_nt_1,))
-      }
-    } else if (experiment_id="test7"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_2, Y=Y_nt_2,testid=testid0,
-                                           tr=Z_nt_2))
-      }
-    } else if (experiment_id="test8"){
-      for (i in 1:iter){
-      testid0<-sample(n,1)
-      results[i]<-do.call(conformal_ITE1,list(params,X=X_nt_3, Y=Y_nt_3, testid=testid0,
-                                           tr=Z_nt_3,))
-      }
-    }
-
- return(results)
-}
+test6_coverage1<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
+                              testid=testid0,
+                              tr=Z_nt_1,
+                              A=A,Atype="adj",
+                              ps_pred_model="binomial",
+                              outfun="RF", CQR=FALSE,
+                              retrainYmodel=FALSE)
 ```
 
 

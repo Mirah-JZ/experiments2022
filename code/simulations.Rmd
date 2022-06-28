@@ -21,6 +21,20 @@ library(sp)
 library(igraph)
 library(tidyverse)
 library(ggplot2)
+library(viridis)
+library(grf)
+library(gbm)
+library(randomForest)
+library(bartMachine)
+library(xgboost)
+library(nnet)
+library(blockCV)
+```
+
+
+```{r}
+source("utils.R")
+# source("gps_weightedconformal.R")
 ```
 
 ## linear
@@ -125,7 +139,7 @@ X_nt_1<-X_ns_1
 A_adj<-as_adjacency_matrix(net1)
 Z_nt_1<-g1$Z
 G_nt_1<-ifelse(g1$G >0.5, 1, 0)
-T_nt_1<-paste0(Z_nt_1,G_nt_1)
+T_nt_1<-paste0("t",Z_nt_1,G_nt_1)
 
 # Compute gps later and check balance.
 save(Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1.Rdata")
@@ -164,7 +178,7 @@ X_nt_2<-X_ns_2
 # A_adj 
 Z_nt_2<-g2$Z
 G_nt_2<-ifelse(g2$G >0.5, 1, 0)
-T_nt_2<-paste0(Z_nt_2,G_nt_2)
+T_nt_2<-paste0("t",Z_nt_2,G_nt_2)
 save(Y00_nt_2,Y01_nt_2,Y10_nt_2,Y11_nt_2,Y_nt_2,X_nt_2,Z_nt_2,G_nt_2,T_nt_2,file="datanet2.Rdata")
 ```
 
@@ -231,7 +245,7 @@ X_nt_3<-X_ns_2
 # A_adj
 Z_nt_3<-g3$Z
 G_nt_3<-ifelse(g3$G >0.5, 1, 0)
-T_nt_3<-paste0(Z_nt_3,G_nt_3)
+T_nt_3<-paste0("t",Z_nt_3,G_nt_3)
 save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3.Rdata")
 ```
 
@@ -275,11 +289,6 @@ check<-data.frame(T_nt_1,test1_gps3) # T predictions only 50% accurate
 
 
 # Testing standard split conformal prediction
-
-```{r utils, include=FALSE, eval=FALSE}
-source("utils.R")
-
-```
 
 
 ```{r test2,  include=TRUE, eval=FALSE}
@@ -345,7 +354,7 @@ spatial linear
 ```{r test3}
 # spatial CF for counterfactual prediciton
 # trainid generated randomly in each tl level.
-T_nt_1<-paste0("t",T_nt_1)
+
 # testid0 694
 X_nt_1Xtest <- X_nt_1[694, ,drop=FALSE]
 Y_nt_1Ytest <- Y_nt_1[694]
@@ -368,21 +377,35 @@ test3_pred[[4]] # t00 [-0.5793577	-0.5793577] observed
 spatial heteroskadestic
 ```{r test4}
 # spatial CF for counterfactual prediciton
+
+X_nt_2Xtest <- X_nt_2[694, ,drop=FALSE]
+Y_nt_2Ytest <- Y_nt_2[694]
+t_nt_2tltest <- T_nt_2[694]
+ps_nt_2wttest <- ps_nt_2[694,4]
+
 test4_pred<-conformalCf_split(X=X_nt_2, Y=Y_nt_2, 
-                              testid=testid0,
+                              X_nt_2Xtest,Y_nt_2Ytest,t_nt_2tltest,ps_nt_2wttest,
                               tl=T_nt_2,
-                              outfun="RF", CQR=FALSE,
-                              ps=ps_nt_2)
+                              outfun="QRF", CQR=TRUE,
+                              ps=ps_nt_2, trainid=NA)
+# 1.075921	1.075921	1.870428	0.5288074	0.2933692	0.3045858	0.6052872 -0.5387912
 ```
 
 spatial heteroskadestic, non-stationary
 ```{r test5}
 # spatial CF for counterfactual prediciton
+
+X_nt_3Xtest <- X_nt_3[694, ,drop=FALSE]
+Y_nt_3Ytest <- Y_nt_3[694]
+t_nt_3tltest <- T_nt_3[694]
+ps_nt_3wttest <- ps_nt_3[694,4]
+
 test5_pred<-conformalCf_split(X=X_nt_3, Y=Y_nt_3, 
-                              testid=testid0,
+                              X_nt_3Xtest,Y_nt_3Ytest,t_nt_3tltest,ps_nt_3wttest,
                               tl=T_nt_3,
-                              outfun="RF", CQR=FALSE,
-                              ps=ps_nt_3)
+                              outfun="QRF", CQR=TRUE,
+                              ps=ps_nt_3, trainid=NA)
+# 0.8366873	0.7176229	0.361684	0.2161662	0.6662771	0.3251723 2.564196	2.564196
 ```
 
 
@@ -401,35 +424,70 @@ The functions need to be modified to take a list of prediction point indices.
 ```{r}
 # test6
 test6_pred1 <-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
-                              testid=testid0,
-                              tr=Z_nt_1,
-                              A=A,Atype="adj",
-                              ps_pred_model="binomial",
-                              outfun="RF", CQR=FALSE)
-
-# 0.02132532  0.1454363  1.320327  1.36071  -1.814676  -1.662121  -0.4872306  -0.475291
-```
-
-
-```{r compute_coverage}
-# repeated experiments via feeding a list of testid to the function
-# either the Ymodel is only fitted once and a list of testid are fed to the model, 
-# or the Ymodel is fitted agian each time a new test point is supplied.
-
-test6_coverage1<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
-                              testid=testid0,
+                              testid=c(694,843),
                               tr=Z_nt_1,
                               A=A,Atype="adj",
                               ps_pred_model="binomial",
                               outfun="RF", CQR=FALSE,
-                              retrainYmodel=FALSE)
+                              retrainYmodel=TRUE) 
+
+# retrainYmodel=FALSE has got an issue !
+
+# -0.6418318  -0.6074899  1.290484  1.306998  -1.397166  -1.351036  0.5469377 0.5516644
+# -0.3038072  -0.2572891  -1.483445  -1.450133  3.653244  3.723609  2.4974531 2.5069188
 ```
 
 
-# plotting spatial conformal outcomes
+```{r compute_coverage}
+# repeat this experiment 100 times:
+# for a single run, input a list of testid, calculate one coverage rate from output.
+
+# either the Ymodel is only fitted once and a list of testid are fed to the model, 
+# or the Ymodel is fitted again each time a new test point is supplied.
+
+# ! atm use retrainYmodel=TRUE, so that the order of outputs will not be scrambled.
+
+testid6 <- sample(1000,10) 
+  
+test6_res<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
+                              testid=testid6,
+                              tr=Z_nt_1,
+                              A=A,Atype="adj",
+                              ps_pred_model="binomial",
+                              outfun="RF", CQR=FALSE,
+                              retrainYmodel=TRUE)
+test6_PO <- test6_res[[1]]
+
+# check prediction against 'true' (as in one realisation of) PO
+# test6_tl<-T_nt_3[testid6] 
+test6_Y <- data.frame(Y11=Y11_nt_1[testid6],
+                      Y10=Y10_nt_1[testid6],
+                      Y01=Y01_nt_1[testid6],
+                      Y00=Y00_nt_1[testid6])
+
+# coverage rate is 0
+cov1 <- test6_PO[,2]-test6_PO[,1] - max(abs(test6_Y [,1]-test6_PO[,1]),
+                                            abs(test6_Y [,1]-test6_PO[,2]))
+which(cov1>0) # 0 correct coverage
+
+cov2 <- test6_PO[,4]-test6_PO[,3] - max(abs(test6_Y [,2]-test6_PO[,3]),
+                                            abs(test6_Y [,2]-test6_PO[,4]))
+which(cov2>0)
+
+cov3 <- test6_PO[,6]-test6_PO[,5] - max(abs(test6_Y [,3]-test6_PO[,5]),
+                                            abs(test6_Y [,3]-test6_PO[,6]))
+which(cov3>0)
+
+cov4 <- test6_PO[,8]-test6_PO[,7] - max(abs(test6_Y [,4]-test6_PO[,7]),
+                                            abs(test6_Y [,4]-test6_PO[,8]))
+which(cov4>0)
+
+```
 
 
-```{r plot1}
-# plotting coverage of expriments
+```{r plot1 }
+# plotting coverage of test6
+
+
 ```
 

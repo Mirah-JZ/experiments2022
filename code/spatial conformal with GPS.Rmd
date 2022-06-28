@@ -13,19 +13,16 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(tidyverse)
 library(ggplot2)
+library(igraph)
 library(viridis)
-library(argparse)
-
 library(grf)
 library(gbm)
 library(randomForest)
 library(bartMachine)
-library(igraph)
 library(xgboost)
-library(MASS)
 library(nnet)
 library(blockCV)
-
+#library(MASS)
 ```
 
 # Intro
@@ -436,7 +433,7 @@ conformalCf_split <- function(X, Y,
       out2 <- conformalSplit(X0[[2]], Y0[[2]],Xtest_grp11,wttest_grp11,outfun,CQR,
                            wt=ps0[[2]][,1]/ps0[[2]][,2],trainid0[[2]])
     
-      out3 <- conformalSplit(X0[[3]], Y0[[3]],Xtest_grp11,wwttest_grp11,outfun,CQR,
+      out3 <- conformalSplit(X0[[3]], Y0[[3]],Xtest_grp11,wttest_grp11,outfun,CQR,
                            wt=ps0[[3]][,1]/ps0[[3]][,3],trainid0[[3]])
     
       out4 <- conformalSplit(X0[[4]], Y0[[4]],Xtest_grp11,wttest_grp11,outfun,CQR,
@@ -446,7 +443,7 @@ conformalCf_split <- function(X, Y,
       
   } else {
     out11<- data.frame()
-    print ("No test ponits with tl=11")}
+    message ("No test ponits with tl=t11")}
   
   test_grp10<-which(tltest=="t10") 
   if ( length(test_grp10)!=0) {
@@ -468,7 +465,7 @@ conformalCf_split <- function(X, Y,
       out10<- cbind.data.frame(out1,out2,out3,out4)
   } else {
     out10<- data.frame()
-    print ("No test ponits with tl=t10")}
+    message ("No test ponits with tl=t10")}
     
   test_grp01 <- which(tltest=="t01") 
   if ( length(test_grp01)!=0) {
@@ -490,7 +487,7 @@ conformalCf_split <- function(X, Y,
       
   } else {
     out01<- data.frame()
-    print ("No test ponits with tl=t01")}
+    message ("No test ponits with tl=t01")}
   
   test_grp00 <- which(tltest=="t00") # checked, correct, numeric vector (integer)
   if ( length(test_grp00)!=0) {
@@ -511,9 +508,10 @@ conformalCf_split <- function(X, Y,
       
   } else {
     out00<- data.frame()
-    print ("No test ponits with tl=t00")}
+    message ("No test ponits with tl=t00")}
   
   out <- rbind.data.frame(out11,out10,out01,out00)
+  out <- na.omit(out)
   # outcome has 8 cols, being the lower and upper bounds of the 4 POs. 
   # outcome has same m of rows as testid length
   return(out)
@@ -530,15 +528,7 @@ Should be careful what average ITE means though. The neighborhood treatment leve
 
 
 ```{r ITE_version1}
-# in this version, testid is a vector of IDs. for each test point, the whole procedure is repeated including the ymodel fitting.
-# difficult to pass whole vector of test points to prediction, because Ymodel training is conditional on the tl of the test point
-# if the list of test points have different tl, it is difficult to parse.
-# Therefore, even though terating over each test point takes longer to run, it is easier to implement...
-
-
 # conformal_ITE1() is the outer func that constructs ITE from Y_obs and counterfactuals
-
-# to do: take quantiles; take test id list
 
 # X, Y
 # testid      index of Xtest point in full X. a single index or a numerical vector length m.
@@ -551,7 +541,7 @@ Should be careful what average ITE means though. The neighborhood treatment leve
 # tranid      optional. list of length 4. trainid for each treatment level.
 # retrainYmodel If true, Ymodel retrained for each test point. If false, Ymodel fitted only once to make predictions for all points.
 
-# output      ITEs and average ITEs over marginal treatment propensities.
+# output      ITEs and POs
 
 conformal_ITE1 <- function(X, Y, testid,
                           tr,
@@ -561,7 +551,7 @@ conformal_ITE1 <- function(X, Y, testid,
                           retrainYmodel=TRUE
                           ){
   # use psfun="get_gps1"
-  
+  PO<-list()
   ITE<-list()
   n <- length(Y)
   m <- length(testid)
@@ -588,18 +578,19 @@ conformal_ITE1 <- function(X, Y, testid,
      Ytest <- Y[testid[i]]
      if(is.na(trainid)){
          Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_test,tl,outfun,CQR,ps=ps,trainid=NA)
-       } else {  print("If trainid not provided, please input NA.")
+       } else {  stop("If trainid not provided, please input NA.")
        }
-     PO<-do.call(conformalCf_split,Cf_params) # get the four potential outcomes
+     PO_temp<-do.call(conformalCf_split,Cf_params) # get the four potential outcomes
      # PO is a dataframe of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
-     ITE[[i]]<-data.frame(spill1_lo=PO[[1]]-PO[[4]],
-                           spill1_up=PO[[2]]-PO[[3]],
-                           spill0_lo=PO[[5]]-PO[[8]],
-                           spill0_up=PO[[6]]-PO[[7]],
-                           direct1_lo=PO[[1]]-PO[[6]],
-                           direct1_up=PO[[2]]-PO[[5]],
-                           direct0_lo=PO[[3]]-PO[[8]],
-                           direct0_up=PO[[4]]-PO[[7]] )
+     ITE[[i]]<-data.frame(spill1_lo=PO_temp[[1]] - PO_temp[[4]],
+                           spill1_up=PO_temp[[2]] - PO_temp[[3]],
+                           spill0_lo=PO_temp[[5]] - PO_temp[[8]],
+                           spill0_up=PO_temp[[6]] - PO_temp[[7]],
+                           direct1_lo=PO_temp[[1]] - PO_temp[[6]],
+                           direct1_up=PO_temp[[2]] - PO_temp[[5]],
+                           direct0_lo=PO_temp[[3]] - PO_temp[[8]],
+                           direct0_up=PO_temp[[4]] - PO_temp[[7]] )
+     PO[[i]]<-PO_temp
      }
      ITE <- do.call("rbind", ITE)
        
@@ -619,25 +610,25 @@ conformal_ITE1 <- function(X, Y, testid,
      Ytest <- Y[testid]
      if(is.na(trainid)){
          Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_test,tl,outfun,CQR,ps=ps,trainid=NA)
-       } else { print("If trainid not provided, please input NA.")
+       } else { stop("If trainid not provided, please input NA.")
        }
-     PO<-do.call(conformalCf_split,Cf_params) 
+     PO_temp <-do.call(conformalCf_split,Cf_params) 
      # PO is a dataframe of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
-     ITE <- data.frame(spill1_lo=PO[[1]]-PO[[4]],
-                       spill1_up=PO[[2]]-PO[[3]],
-                       spill0_lo=PO[[5]]-PO[[8]],
-                       spill0_up=PO[[6]]-PO[[7]],
-                       direct1_lo=PO[[1]]-PO[[6]],
-                       direct1_up=PO[[2]]-PO[[5]],
-                       direct0_lo=PO[[3]]-PO[[8]],
-                       direct0_up=PO[[4]]-PO[[7]] )
+     ITE <- data.frame(spill1_lo=PO_temp[[1]] - PO_temp[[4]],
+                       spill1_up=PO_temp[[2]] - PO_temp[[3]],
+                       spill0_lo=PO_temp[[5]] - PO_temp[[8]],
+                       spill0_up=PO_temp[[6]] - PO_temp[[7]],
+                       direct1_lo=PO_temp[[1]] - PO_temp[[6]],
+                       direct1_up=PO_temp[[2]] - PO_temp[[5]],
+                       direct0_lo=PO_temp[[3]] - PO_temp[[8]],
+                       direct0_up=PO_temp[[4]] - PO_temp[[7]] )
+     PO[[i]]<-PO_temp
   }
-
-  return (ITE)
+  
+  PO <- do.call(rbind,PO)
+  return (list(PO,ITE))
 }
 ```
-
-
 
 
 ### ITE prediction with ps weighted split conformal. Under spatial interference, continuous treatment(s). (new)
@@ -650,6 +641,8 @@ This version takes longer to run since the target is dose-response curve. Ration
 # conformal_ITE2() constructs ITE / dose-response curves from observed outcome and predicted
 
 ```
+
+
 
 
 ## Refinement1: non-exchangeabilitya and adjustments. (new)

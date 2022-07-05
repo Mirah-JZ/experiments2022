@@ -147,13 +147,15 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
   censoring <- function(x){pmin(pmax(x, 0.05), 20)}
   m <- length(Xtest) # the number of testing points
   qt <- c() # vector qt for each test point.
+  
+  # need to check weights
   for (i in 1:m) {
     wt_cal <- wt[-trainid]
     avg_wt <- mean(c(wt_cal, wt_test[i])) # wt_test is a vector
     wt_cal <- censoring(wt_cal/avg_wt)
     wt_test[i] <- censoring(wt_test[i]/avg_wt)
     totw <- sum(wt_cal)
-    #wt_cal <- wt_cal / totw
+    wt_cal <- wt_cal / totw
     qt[i] <- (1 + wt_test[i] / totw) * (1 - alpha) # quantile 1-alpha weighted
     qt[i] <- pmin(qt[i], 1)
   }
@@ -163,7 +165,7 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
     #Ymodel <- function(x){do.call(outfun, list(Y = Ytrain, X = Xtrain,Xtest=x))}
     Ymodel <- randomForest::randomForest(x = Xtrain, y = Ytrain)
     Ycal_hat <- predict(Ymodel, newdata = Xcal)
-    Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=0)
+    Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=0) # quantile=0 mean pred
     
     Ytest_hat <- predict(Ymodel, newdata = Xtest) # numeric vector
     
@@ -188,6 +190,7 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
   }
   return(out)
 }
+
 
 
 # -----------------------------------------------------------------------------
@@ -228,7 +231,7 @@ conformalCf_split <- function(X, Y,
   X0<-Y0<-ps0<-out0<-trainid0<-list()
   n0<-lengths(inds)
   minn<-min(n0)
-  testn<-floor(minn*0.6)
+  testn<-floor(minn*0.6) # typo, should be trn
   
   for (i in 1:4){
     if (is.na(trainid)){
@@ -237,103 +240,104 @@ conformalCf_split <- function(X, Y,
     X0[[i]] <- X[inds[[i]], ,drop=FALSE]
     Y0[[i]] <- Y[inds[[i]]]
     ps0[[i]]<- ps[inds[[i]], ,drop=FALSE] 
-    # X0, Y0 has 4 elements, each specific to t11 t10 t01 t00
-    # trainid0 each element is train id for each of the X0 Y0 elements.
-    # ps0 has 6 cols, 11, 10, 01, 00, (z, g)
+    # X0, Y0 , ps0 has 4 elements, each specific to t11 t10 t01 t00
+    # trainid0 elements correspond to each of the X0 Y0 ps0 elements.
+    # ps0[[i]] df has 6 (4) cols for 11, 10, 01, 00, (z, g)
   } 
   
   
   # parse the test points into four groups by tl types.
-  # make predictions for each tl type test points and combine the results.
+  # make predictions for each tl type and combine results.
   test_grp11<-which(tltest=="t11")# return index within the test points
   if ( length(test_grp11)!=0){
     Xtest_grp11<-Xtest[test_grp11, ,drop=FALSE]
     Ytest_grp11<-Ytest[test_grp11]
-    wttest_grp11<-wt_test[test_grp11]
+    wttest_grp11<-wt_test[test_grp11, ,drop=FALSE]
     
     out1 <- data.frame(lower=Ytest_grp11,upper=Ytest_grp11)
     
-    out2 <- conformalSplit(X0[[2]], Y0[[2]],Xtest_grp11,wttest_grp11,outfun,CQR,
-                           wt=ps0[[2]][,1]/ps0[[2]][,2],trainid0[[2]])
+    out2 <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,2],
+                           outfun,CQR,wt=ps0[[2]][,1]/ps0[[2]][,2],trainid0[[2]])
     
-    out3 <- conformalSplit(X0[[3]], Y0[[3]],Xtest_grp11,wwttest_grp11,outfun,CQR,
-                           wt=ps0[[3]][,1]/ps0[[3]][,3],trainid0[[3]])
+    out3 <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,3],
+                           outfun,CQR,wt=ps0[[3]][,1]/ps0[[3]][,3],trainid0[[3]])
     
-    out4 <- conformalSplit(X0[[4]], Y0[[4]],Xtest_grp11,wttest_grp11,outfun,CQR,
-                           wt=ps0[[4]][,1]/ps0[[4]][,4],trainid0[[4]])
+    out4 <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,4],
+                           outfun,CQR,wt=ps0[[4]][,1]/ps0[[4]][,4],trainid0[[4]])
     
     out11<- cbind.data.frame(out1,out2,out3,out4)
     
   } else {
     out11<- data.frame()
-    message ("No test ponits with tl=11")}
+    message ("No test points with tl=t11")}
   
   test_grp10<-which(tltest=="t10") 
   if ( length(test_grp10)!=0) {
     Xtest_grp10 <- Xtest[test_grp10, ,drop=FALSE]
     Ytest_grp10 <- Ytest[test_grp10]
-    wttest_grp10 <- wt_test[test_grp10]
+    wttest_grp10 <- wt_test[test_grp10, ,drop=FALSE]
     
-    out1 <- conformalSplit(X0[[1]], Y0[[1]], Xtest_grp10,wttest_grp10,outfun,CQR,
-                           wt=ps0[[1]][,2]/ps0[[1]][,1],trainid0[[1]])
+    out1 <- conformalSplit(X0[[1]],Y0[[1]], Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,1],
+                           outfun,CQR,wt=ps0[[1]][,2]/ps0[[1]][,1],trainid0[[1]])
     
     out2 <- data.frame(lower=Ytest_grp10,upper=Ytest_grp10)
     
-    out3 <- conformalSplit(X0[[3]], Y0[[3]],  Xtest_grp10,wttest_grp10,outfun,CQR,
-                           wt=ps0[[3]][,2]/ps0[[3]][,3],trainid0[[3]])
+    out3 <- conformalSplit(X0[[3]],Y0[[3]],  Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,3],
+                           outfun,CQR,wt=ps0[[3]][,2]/ps0[[3]][,3],trainid0[[3]])
     
-    out4 <- conformalSplit(X0[[4]], Y0[[4]],  Xtest_grp10,wttest_grp10,outfun,CQR,
-                           wt=ps0[[4]][,2]/ps0[[4]][,4],trainid0[[4]])
+    out4 <- conformalSplit(X0[[4]],Y0[[4]],  Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,4],
+                           outfun,CQR,wt=ps0[[4]][,2]/ps0[[4]][,4],trainid0[[4]])
     
     out10<- cbind.data.frame(out1,out2,out3,out4)
   } else {
     out10<- data.frame()
-    message ("No test ponits with tl=t10")}
+    message ("No test points with tl=t10")}
   
   test_grp01 <- which(tltest=="t01") 
   if ( length(test_grp01)!=0) {
     Xtest_grp01 <- Xtest[test_grp01, ,drop=FALSE]
     Ytest_grp01 <- Ytest[test_grp01]
-    wttest_grp01 <- wt_test[test_grp01]
-    out1 <- conformalSplit(X0[[1]], Y0[[1]],Xtest_grp01,wttest_grp01,outfun,CQR,
-                           wt=ps0[[1]][,3]/ps0[[1]][,1],trainid0[[1]])
+    wttest_grp01 <- wt_test[test_grp01, ,drop=FALSE]
+    out1 <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,1],
+                           outfun,CQR,wt=ps0[[1]][,3]/ps0[[1]][,1],trainid0[[1]])
     
-    out2 <- conformalSplit(X0[[2]], Y0[[2]], Xtest_grp01,wttest_grp01,outfun,CQR,
-                           wt=ps0[[2]][,3]/ps0[[2]][,2],trainid0[[2]])
+    out2 <- conformalSplit(X0[[2]],Y0[[2]], Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,2],
+                           outfun,CQR,wt=ps0[[2]][,3]/ps0[[2]][,2],trainid0[[2]])
     
     out3 <- data.frame(lower=Ytest_grp01,upper=Ytest_grp01)
     
-    out4 <- conformalSplit(X0[[4]], Y0[[4]], Xtest_grp01,wttest_grp01,outfun,CQR,
-                           wt=ps0[[4]][,3]/ps0[[4]][,4],trainid0[[4]])
+    out4 <- conformalSplit(X0[[4]],Y0[[4]], Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,4],
+                           outfun,CQR,wt=ps0[[4]][,3]/ps0[[4]][,4],trainid0[[4]])
     
     out01<- cbind.data.frame(out1,out2,out3,out4)
     
   } else {
     out01<- data.frame()
-    message ("No test ponits with tl=t01")}
+    message ("No test points with tl=t01")}
   
   test_grp00 <- which(tltest=="t00") # checked, correct, numeric vector (integer)
   if ( length(test_grp00)!=0) {
     Xtest_grp00 <- Xtest[test_grp00, ,drop=FALSE]
     Ytest_grp00 <- Ytest[test_grp00]
-    wttest_grp00 <- wt_test[test_grp00]
-    out1 <- conformalSplit(X0[[1]], Y0[[1]], Xtest_grp00,wttest_grp00,outfun,CQR,
-                           wt=ps0[[1]][,4]/ps0[[1]][,1],trainid0[[1]])
+    wttest_grp00 <- wt_test[test_grp00, ,drop=FALSE]
+    out1 <- conformalSplit(X0[[1]],Y0[[1]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,1],
+                           outfun,CQR,wt=ps0[[1]][,4]/ps0[[1]][,1],trainid0[[1]])
     
-    out2 <- conformalSplit(X0[[2]], Y0[[2]], Xtest_grp00,wttest_grp00,outfun,CQR,
-                           wt=ps0[[2]][,4]/ps0[[2]][,2],trainid0[[2]])
+    out2 <- conformalSplit(X0[[2]],Y0[[2]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,2],
+                           outfun,CQR,wt=ps0[[2]][,4]/ps0[[2]][,2],trainid0[[2]])
     
-    out3 <- conformalSplit(X0[[3]], Y0[[3]], Xtest_grp00,wttest_grp00,outfun,CQR,
-                           wt=ps0[[3]][,4]/ps0[[3]][,3],trainid0[[3]])
+    out3 <- conformalSplit(X0[[3]],Y0[[3]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,3],
+                           outfun,CQR, wt=ps0[[3]][,4]/ps0[[3]][,3],trainid0[[3]])
     out4 <- data.frame(lower=Ytest_grp00,upper=Ytest_grp00)
     
     out00<- cbind.data.frame(out1,out2,out3,out4) 
     
   } else {
     out00<- data.frame()
-    message ("No test ponits with tl=t00")}
+    message ("No test points with tl=t00")}
   
   out <- rbind.data.frame(out11,out10,out01,out00)
+  out <- na.omit(out)
   # outcome has 8 cols, being the lower and upper bounds of the 4 POs. 
   # outcome has same m of rows as testid length
   return(out)
@@ -368,15 +372,13 @@ conformal_ITE1 <- function(X, Y, testid,
                            retrainYmodel=TRUE
 ){
   # use psfun="get_gps1"
-  
+  PO<-list()
   ITE<-list()
   n <- length(Y)
   m <- length(testid)
   
   # compute joint and marginal propensity scores
-  # ps are used here to calculate ITEs, and passed on to conformalSplit() as weights
-  ps<-get_gps1(tr,covar=X,A,Atype,pstype="joint",ps_pred_model="binomial") # dataframe n*6
-  
+  ps<-get_gps1(tr,covar=X,A,Atype,pstype="joint",ps_pred_model) # df n*6/ 4
   # compute counterfactuals
   trnei<-get_trnei1(tr,A,Atype)
   tl <- paste0("t",tr,trnei) # tls ("t00","t01","t10","t11")
@@ -386,27 +388,37 @@ conformal_ITE1 <- function(X, Y, testid,
       Ztest <- tr[testid[i]] 
       Gtest <- trnei[testid[i]] 
       tltest <- paste0("t",Ztest,Gtest) 
-      if(tltest=="t11"){wt_test<- ps[testid[i],1]
-      } else if (tltest=="t10") {wt_test<- ps[testid[i],2]
-      } else if (tltest=="t01") {wt_test<- ps[testid[i],3]
-      } else {wt_test<- ps[testid[i],4]
-      }
+      wt_test<- ps[testid[i], ,drop=FALSE] # 4 cols
+      
+      #if(tltest=="t11"){wt_test<- ps[testid[i],1]
+      #} else if (tltest=="t10") {wt_test<- ps[testid[i],2]
+      #} else if (tltest=="t01") {wt_test<- ps[testid[i],3]
+      #} else {wt_test<- ps[testid[i],4]}
+      
       Xtest <- X[testid[i], ,drop=FALSE]
       Ytest <- Y[testid[i]]
+      
+      #wt_diagnostics <- 1
+      #ps_diagnostics <- data.frame(rep(1:n),rep(1:n),rep(1:n),rep(1:n))
+      
       if(is.na(trainid)){
         Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_test,tl,outfun,CQR,ps=ps,trainid=NA)
+        #Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_diagnostics,tl,outfun,CQR,
+        # ps=ps_diagnostics,trainid=NA)
       } else {  stop("If trainid not provided, please input NA.")
       }
-      PO<-do.call(conformalCf_split,Cf_params) # get the four potential outcomes
-      # PO is a dataframe of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
-      ITE[[i]]<-data.frame(spill1_lo=PO[[1]]-PO[[4]],
-                           spill1_up=PO[[2]]-PO[[3]],
-                           spill0_lo=PO[[5]]-PO[[8]],
-                           spill0_up=PO[[6]]-PO[[7]],
-                           direct1_lo=PO[[1]]-PO[[6]],
-                           direct1_up=PO[[2]]-PO[[5]],
-                           direct0_lo=PO[[3]]-PO[[8]],
-                           direct0_up=PO[[4]]-PO[[7]] )
+      # customized trainid under development
+      PO_temp<-do.call(conformalCf_split,Cf_params) # get the four POs
+      # PO is a df of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
+      ITE[[i]]<-data.frame(spill1_lo=PO_temp[[1]] - PO_temp[[4]],
+                           spill1_up=PO_temp[[2]] - PO_temp[[3]],
+                           spill0_lo=PO_temp[[5]] - PO_temp[[8]],
+                           spill0_up=PO_temp[[6]] - PO_temp[[7]],
+                           direct1_lo=PO_temp[[1]] - PO_temp[[6]],
+                           direct1_up=PO_temp[[2]] - PO_temp[[5]],
+                           direct0_lo=PO_temp[[3]] - PO_temp[[8]],
+                           direct0_up=PO_temp[[4]] - PO_temp[[7]] )
+      PO[[i]]<-PO_temp
     }
     ITE <- do.call("rbind", ITE)
     
@@ -428,19 +440,20 @@ conformal_ITE1 <- function(X, Y, testid,
       Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_test,tl,outfun,CQR,ps=ps,trainid=NA)
     } else { stop("If trainid not provided, please input NA.")
     }
-    PO<-do.call(conformalCf_split,Cf_params) 
-    # PO is a dataframe of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
-    ITE <- data.frame(spill1_lo=PO[[1]]-PO[[4]],
-                      spill1_up=PO[[2]]-PO[[3]],
-                      spill0_lo=PO[[5]]-PO[[8]],
-                      spill0_up=PO[[6]]-PO[[7]],
-                      direct1_lo=PO[[1]]-PO[[6]],
-                      direct1_up=PO[[2]]-PO[[5]],
-                      direct0_lo=PO[[3]]-PO[[8]],
-                      direct0_up=PO[[4]]-PO[[7]] )
+    PO_temp <-do.call(conformalCf_split,Cf_params) 
+    # PO is a df of 8 cols: the lo and up bounds of the 4 POs re 11 10 01 00.
+    ITE <- data.frame(spill1_lo=PO_temp[[1]] - PO_temp[[4]],
+                      spill1_up=PO_temp[[2]] - PO_temp[[3]],
+                      spill0_lo=PO_temp[[5]] - PO_temp[[8]],
+                      spill0_up=PO_temp[[6]] - PO_temp[[7]],
+                      direct1_lo=PO_temp[[1]] - PO_temp[[6]],
+                      direct1_up=PO_temp[[2]] - PO_temp[[5]],
+                      direct0_lo=PO_temp[[3]] - PO_temp[[8]],
+                      direct0_up=PO_temp[[4]] - PO_temp[[7]] )
+    PO[[i]]<-PO_temp
   }
-  
-  return (ITE)
+  PO <- do.call(rbind,PO)
+  return (list(PO,ITE))
 }
 
 

@@ -8,7 +8,8 @@ source("utils.R")
 # get_gps1
 # -----------------------------------------------------------------------------
 # Getting propensity scores for spatial interference under conditional ignorability.
-# Binary treatment, 4 exposure levels 00, 01, 10, 11
+# binary treatment, 4 exposure levels 00, 01, 10, 11
+# treatment probability ~ multinom or binom
 
 # input
 # tr          col vector of individual level binary treatments, numeric
@@ -19,7 +20,7 @@ source("utils.R")
 # pstype      "joint" f(x)=P(Z=z,G=g|X=x), 
 #             "conditional_g" f(x,z)=P(G=g|Z=z,X=x), 
 #             "conditional_z" f(x,g)=P(Z=z|G=g,X=x),
-# ps_pred_model  "xgboost" or "multinom" or "binomial" 
+# ps_pred_model  "gbm" or "multinom" or "binomial" 
 # output
 # ps          if pstype=="joint", outputs joint ps(Z,G) and marginals Z, G
 #             if pstype=="conditional_g", outputs marginal ps for G. 
@@ -35,12 +36,14 @@ get_gps1 <- function(tr,
   
   # format treatment and covariates
   n<-length(tr)
+  
   if (Atype=="dist") {
     # define treatment levels tl based on tr and A, 4 treatment levels
     # to do: these lines need to be put into a function  get_trnei1(tr,A,Atype)
     trnei <-get_trnei1(tr,A,Atype)
     tl <- paste0("t",tr,trnei) # treatment level, multinomial.
     # construct neighborhood covariates
+    A0<-A/rowSums(A)
     k <- ncol(covar) 
     covnei <- list()
     for (i in 1:k) {
@@ -53,6 +56,7 @@ get_gps1 <- function(tr,
     trnei <-get_trnei1(tr,A,Atype)
     tl <- paste0("t",tr,trnei)
     # construct neighborhood covariates
+    A0<-A/rowSums(A)
     k <- ncol(covar)
     covnei <- list()
     for (i in 1:k) {
@@ -74,8 +78,7 @@ get_gps1 <- function(tr,
       # cols are ordered 00, 01, 10, 11
       ps <-ps[,c(4,3,2,1)]
       colnames(ps)<-c("t11","t10","t01","t00")
-    } else {
-      # "binomial"
+    } else if (ps_pred_model=="binomial"){
       T_1 <- glm.fit(x=covar,y=tr,family=binomial())
       T_2 <- glm.fit(x=covnei,y=trnei,family=binomial())
       ps1 <-  T_1$fitted.values# p(Z|X_z)
@@ -86,7 +89,20 @@ get_gps1 <- function(tr,
       gps4 <- 1-ps1-gps3 # z=0,g=0 
       ps<-cbind(gps1,gps2,gps3,gps4,ps1,ps2)
       colnames(ps)<-c("t11","t10","t01","t00","z","g")
-    } 
+    } else if(ps_pred_model=="gbm"){
+      T_1 <- gbm::gbm(Y ~ .,distribution="bernoulli",
+                      data=data.frame(Y=tr,covar), n.trees = 100)
+      T_2 <- gbm::gbm(Y ~ .,distribution="bernoulli",
+                      data=data.frame(Y=trnei,covnei), n.trees = 100)               
+      ps1 <- predict(T_1, data.frame(covar), type = "response", n.trees = 100)
+      ps2 <- predict(T_2, data.frame(covnei), type = "response", n.trees = 100)
+      gps1 <- ps1*ps2 # z=1,g=1
+      gps2 <- ps1-gps1 # z=1,g=0 
+      gps3 <- (1-ps1)*ps2 # z=0,g=1 
+      gps4 <- 1-ps1-gps3 # z=0,g=0 
+      ps<-cbind(gps1,gps2,gps3,gps4,ps1,ps2)
+      colnames(ps)<-c("t11","t10","t01","t00","z","g")
+    }
   } else if (pstype=="conditional_g"){
     # P(G=g|Z=z,X=x)
     if (ps_pred_model=="xgboost"){
@@ -97,7 +113,7 @@ get_gps1 <- function(tr,
       pred0 <- glm.fit(x=c(tr,covar0),y=trnei,family=binomial())
       ps <- pred0$fitted.values
     }    
-  } else {
+  } else if (pstype=="conditional_z") {
     # "conditional_z" P(Z=z|G=g,X=x)
     if (ps_pred_model=="xgboost"){
       data0=cbind.data.frame(covar0,tr,trnei)
@@ -111,18 +127,15 @@ get_gps1 <- function(tr,
   return(ps)
 }
 
-
 # -----------------------------------------------------------------------------
 # conformalSplit()
 # -----------------------------------------------------------------------------
 
 # conformalSplit() is the base prediction function, a weighted split cf.
 
-# to do 1: fix function to take a testid list
-
 # X, Y
-# Xtest     X of testing point. dataframe 1-m rows
-# wt_test   wt of testing point. dataframe 1-m rows
+# Xtest     X of testing point. dataframe m rows
+# wt_test   wt of testing point. dataframe m rows
 # outfun    function for predicting Y
 # CQR       whether use quantile regression for Ymodel
 # wt        weights of all units 
@@ -134,7 +147,7 @@ get_gps1 <- function(tr,
 
 
 conformalSplit <- function(X, Y, Xtest,wt_test,
-                           outfun, CQR=FALSE,
+                           outfun, CQR,
                            wt,
                            trainid,
                            alpha=0.1) {
@@ -145,18 +158,24 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
   Ycal <- Y[-trainid]
   
   censoring <- function(x){pmin(pmax(x, 0.05), 20)}
-  m <- length(Xtest) # the number of testing points
+  m <- nrow(Xtest) # the number of testing points
   qt <- c() # vector qt for each test point.
+  Yslack <- c()
   
-  # need to check weights
+  # need to check weights more closely. why are they behaving so badly?
+  # censor first to avoid messing up the mean!
+  wt <- pmin(wt,400) 
+  wt_test <- pmin(wt_test,400)
+  
+  wt_cal <- wt[-trainid]
+  avg_wt <- mean(wt_cal) # wt_test is a vector
+  wt_cal <- censoring(wt_cal/avg_wt)
+  totw <- sum(wt_cal)
+  wt_cal <- wt_cal / totw
+  
   for (i in 1:m) {
-    wt_cal <- wt[-trainid]
-    avg_wt <- mean(c(wt_cal, wt_test[i])) # wt_test is a vector
-    wt_cal <- censoring(wt_cal/avg_wt)
-    wt_test[i] <- censoring(wt_test[i]/avg_wt)
-    totw <- sum(wt_cal)
-    wt_cal <- wt_cal / totw
-    qt[i] <- (1 + wt_test[i] / totw) * (1 - alpha) # quantile 1-alpha weighted
+    wt_test[i] <- censoring(wt_test[i]/mean(c(wt_cal,wt_test[i])))
+    qt[i] <- (1 + wt_test[i] / totw) * (1 - alpha) 
     qt[i] <- pmin(qt[i], 1)
   }
   
@@ -165,52 +184,74 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
     #Ymodel <- function(x){do.call(outfun, list(Y = Ytrain, X = Xtrain,Xtest=x))}
     Ymodel <- randomForest::randomForest(x = Xtrain, y = Ytrain)
     Ycal_hat <- predict(Ymodel, newdata = Xcal)
-    Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=0) # quantile=0 mean pred
-    
+    Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=FALSE) 
     Ytest_hat <- predict(Ymodel, newdata = Xtest) # numeric vector
     
-    Yslack <- weightedConformalCutoff(Yscore, wt_cal, qt) 
-    Ylo <- Ytest_hat - Yslack
-    Yup <- Ytest_hat + Yslack
-    out <- data.frame(lower = Ylo, upper = Yup)
-  } else{
-    # conformalised quantile regression. default outfun= QRF
-    Ymodel <- grf::quantile_forest(X = Xtrain, Y = Ytrain,quantiles = c(0.05,0.95))
-    Ycal_hat <- predict(Ymodel, Xcal,quantiles = c(0.05,0.95))
-    Ycal_hat <- Ycal_hat$predictions
-    Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=1)
+    for (i in 1:m) {Yslack[i]<-weightedConformalCutoff(Yscore, wt_cal, qt[i])} 
+    # watch out for the shape of data, Ytest_hat & Yslack both col vec here
+    out <-data.frame(Ylo=Ytest_hat,Yup=Ytest_hat)
+    out$Ylo<- out$Ylo - Yslack
+    out$Yup<- out$Yup + Yslack
     
-    Ytest_hat <- predict(Ymodel, Xtest,quantiles = c(0.05,0.95))
-    Ytest_hat <-Ytest_hat$predictions # matrix
+  } else if (CQR==TRUE){
+    # why for CQR Yscore is a vector and not 2 cols?
+    if (outfun=="QRF"){
+      Ymodel <- grf::quantile_forest(X = Xtrain, Y = Ytrain,quantiles = c(0.05,0.95))
+      Ycal_hat <- predict(Ymodel, Xcal,quantiles = c(0.05,0.95))
+      Ycal_hat <- Ycal_hat$predictions # matrix col2
+      Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=TRUE)
+      
+      Ytest_hat <- predict(Ymodel, Xtest,quantiles = c(0.05,0.95))
+      Ytest_hat <-Ytest_hat$predictions # matrix col2, m rows
+      
+      for (i in 1:m) {Yslack[i] <- weightedConformalCutoff(Yscore, wt_cal, qt[i]) }
+      
+      out <-data.frame(Ylo=Ytest_hat[,1],Yup=Ytest_hat[,2])
+      out$Ylo<- out$Ylo - Yslack
+      out$Yup<- out$Yup + Yslack
+      
+    } else if (outfun=="QBART"){
+      Xtrain <- as.data.frame(Xtrain)
+      Ymodel <- bartMachine::bartMachine(X=Xtrain, y=Ytrain, verbose = FALSE)
+      
+      Ycal_hat <- bartMachine::calc_prediction_intervals(
+        Ymodel, new_data = Xcal,pi_conf = 0.95)$interval # matrix col2
+      
+      Yscore <- conformalScore(Ycal, Ycal_hat,quantiles=TRUE)
+      
+      Ytest_hat <- bartMachine::calc_prediction_intervals(
+        Ymodel, new_data = Xtest,pi_conf = 0.95)$interval # matrix col2, m rows
+      
+      for (i in 1:m) {Yslack[i] <- weightedConformalCutoff(Yscore, wt_cal, qt[i]) } 
+      #Yslack <- weightedquantile(Yscore, prob=0.9, wt_cal,sorted=FALSE) 
+      
+      out <-data.frame(Ylo=Ytest_hat[,1],Yup=Ytest_hat[,2])
+      out$Ylo<- out$Ylo - Yslack
+      out$Yup<- out$Yup + Yslack
+    }
     
-    Yslack <- weightedConformalCutoff(Yscore, wt_cal, qt) 
-    Ylo <- Ytest_hat[,1] - Yslack
-    Yup <- Ytest_hat[,2] + Yslack
-    out <- data.frame(lower = Ylo, upper = Yup)
   }
+  
   return(out)
 }
-
-
 
 # -----------------------------------------------------------------------------
 # conformalCf_split()
 # -----------------------------------------------------------------------------
-# conformalCf_split() formats data and pass them to conformalSplit() 
-# It handles the conditioning of cf predictions on the observed tl of test units.
+# conformalCf_split() formats data and params, pass them to conformalSplit() to predict counterfactuals
 
 # to do: take quantiles; take test id list
 
 # X, Y        observed X and Y of all units
-# Xtest       data point to do prediction on, single point 
-# Ytest       observed Y value for test point, single point 
-# tltest      observed exposure level of test point, single point 
-# wt_test     Propensity of test point receiving observed treatment, single point 
+# Xtest       data point to do prediction on 
+# Ytest       observed Y value for test point
+# tltest      observed exposure level of test point 
+# wt_test     Propensity of test point receiving observed treatment 
 # tl          vector of exposure levels to all units
 # A           spatial network A_ji, in the form of adjacency matrix or distance matrix 
 # Atype       type of A, "dist" or "adj", 
 # ps_pred_model passed to conformalSplit()
-# outfun      passed to conformalSplit()
+# outfun      passed to conformalSplit(), RF/QRF/QBART
 # CQR         passed to conformalSplit()
 # ps          passed to conformalSplit()
 # trainid     optional. interface to other sampling methods. Internal default is random sampling
@@ -218,24 +259,24 @@ conformalSplit <- function(X, Y, Xtest,wt_test,
 conformalCf_split <- function(X, Y, 
                               Xtest,Ytest,tltest,wt_test,
                               tl,
-                              outfun, CQR=FALSE,
+                              outfun, CQR,
                               ps,trainid){
   
   inds11 <- which(tl == "t11")
   inds10 <- which(tl == "t10")
   inds01 <- which(tl == "t01")
   inds00 <- which(tl == "t00")
-  inds<-list(inds11,inds10,inds01,inds00) # list of index, careful with the ordering
+  inds<-list(inds11,inds10,inds01,inds00) # list of index, careful with the ordering!
   
   # parse index
   X0<-Y0<-ps0<-out0<-trainid0<-list()
   n0<-lengths(inds)
   minn<-min(n0)
-  testn<-floor(minn*0.6) # typo, should be trn
+  trn<-floor(minn*0.6) 
   
   for (i in 1:4){
     if (is.na(trainid)){
-      trainid0[[i]]<- sample(n0[[i]], testn) # same size samples
+      trainid0[[i]]<- sample(n0[[i]], trn) # same size samples
     } else {trainid0[[i]]<-trainid[[i]]}
     X0[[i]] <- X[inds[[i]], ,drop=FALSE]
     Y0[[i]] <- Y[inds[[i]]]
@@ -245,27 +286,30 @@ conformalCf_split <- function(X, Y,
     # ps0[[i]] df has 6 (4) cols for 11, 10, 01, 00, (z, g)
   } 
   
-  
   # parse the test points into four groups by tl types.
   # make predictions for each tl type and combine results.
+  coln<- c("low11","up11","low10","up10","low01","up01","low00","up00")
   test_grp11<-which(tltest=="t11")# return index within the test points
   if ( length(test_grp11)!=0){
     Xtest_grp11<-Xtest[test_grp11, ,drop=FALSE]
     Ytest_grp11<-Ytest[test_grp11]
     wttest_grp11<-wt_test[test_grp11, ,drop=FALSE]
     
-    out1 <- data.frame(lower=Ytest_grp11,upper=Ytest_grp11)
+    out1a <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,1],
+                            outfun,CQR,wt=ps0[[1]][,1]/ps0[[1]][,1],trainid0[[1]])
+    # Tobs is estimated, G could be wrong, therefore Y_Tobs shoudl still be predicted.
+    out2a <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,2],
+                            outfun,CQR,wt=ps0[[2]][,1]/ps0[[2]][,2],trainid0[[2]])
     
-    out2 <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,2],
-                           outfun,CQR,wt=ps0[[2]][,1]/ps0[[2]][,2],trainid0[[2]])
+    out3a <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,3],
+                            outfun,CQR,wt=ps0[[3]][,1]/ps0[[3]][,3],trainid0[[3]])
     
-    out3 <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,3],
-                           outfun,CQR,wt=ps0[[3]][,1]/ps0[[3]][,3],trainid0[[3]])
+    out4a <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,4],
+                            outfun,CQR,wt=ps0[[4]][,1]/ps0[[4]][,4],trainid0[[4]])
+    # out4 cf Y00 is trained on the [[4]] of X0, Y0, ps0, trainid0 where all obs has t00
     
-    out4 <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp11,wttest_grp11[,1]/wttest_grp11[,4],
-                           outfun,CQR,wt=ps0[[4]][,1]/ps0[[4]][,4],trainid0[[4]])
-    
-    out11<- cbind.data.frame(out1,out2,out3,out4)
+    out11<- cbind.data.frame(out1a,out2a,out3a,out4a)
+    colnames(out11)<-coln
     
   } else {
     out11<- data.frame()
@@ -277,18 +321,20 @@ conformalCf_split <- function(X, Y,
     Ytest_grp10 <- Ytest[test_grp10]
     wttest_grp10 <- wt_test[test_grp10, ,drop=FALSE]
     
-    out1 <- conformalSplit(X0[[1]],Y0[[1]], Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,1],
-                           outfun,CQR,wt=ps0[[1]][,2]/ps0[[1]][,1],trainid0[[1]])
+    out1b <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,1],
+                            outfun,CQR,wt=ps0[[1]][,2]/ps0[[1]][,1],trainid0[[1]])
     
-    out2 <- data.frame(lower=Ytest_grp10,upper=Ytest_grp10)
+    out2b <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,2],
+                            outfun,CQR,wt=ps0[[2]][,2]/ps0[[2]][,2],trainid0[[2]])
     
-    out3 <- conformalSplit(X0[[3]],Y0[[3]],  Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,3],
-                           outfun,CQR,wt=ps0[[3]][,2]/ps0[[3]][,3],trainid0[[3]])
+    out3b <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,3],
+                            outfun,CQR,wt=ps0[[3]][,2]/ps0[[3]][,3],trainid0[[3]])
     
-    out4 <- conformalSplit(X0[[4]],Y0[[4]],  Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,4],
-                           outfun,CQR,wt=ps0[[4]][,2]/ps0[[4]][,4],trainid0[[4]])
+    out4b <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp10,wttest_grp10[,2]/wttest_grp10[,4],
+                            outfun,CQR,wt=ps0[[4]][,2]/ps0[[4]][,4],trainid0[[4]])
     
-    out10<- cbind.data.frame(out1,out2,out3,out4)
+    out10<- cbind.data.frame(out1b,out2b,out3b,out4b)
+    colnames(out10)<-coln
   } else {
     out10<- data.frame()
     message ("No test points with tl=t10")}
@@ -298,18 +344,20 @@ conformalCf_split <- function(X, Y,
     Xtest_grp01 <- Xtest[test_grp01, ,drop=FALSE]
     Ytest_grp01 <- Ytest[test_grp01]
     wttest_grp01 <- wt_test[test_grp01, ,drop=FALSE]
-    out1 <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,1],
-                           outfun,CQR,wt=ps0[[1]][,3]/ps0[[1]][,1],trainid0[[1]])
+    out1c <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,1],
+                            outfun,CQR,wt=ps0[[1]][,3]/ps0[[1]][,1],trainid0[[1]])
     
-    out2 <- conformalSplit(X0[[2]],Y0[[2]], Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,2],
-                           outfun,CQR,wt=ps0[[2]][,3]/ps0[[2]][,2],trainid0[[2]])
+    out2c <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,2],
+                            outfun,CQR,wt=ps0[[2]][,3]/ps0[[2]][,2],trainid0[[2]])
     
-    out3 <- data.frame(lower=Ytest_grp01,upper=Ytest_grp01)
+    out3c <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,3],
+                            outfun,CQR,wt=ps0[[3]][,3]/ps0[[3]][,3],trainid0[[3]])
     
-    out4 <- conformalSplit(X0[[4]],Y0[[4]], Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,4],
-                           outfun,CQR,wt=ps0[[4]][,3]/ps0[[4]][,4],trainid0[[4]])
+    out4c <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp01,wttest_grp01[,3]/wttest_grp01[,4],
+                            outfun,CQR,wt=ps0[[4]][,3]/ps0[[4]][,4],trainid0[[4]])
     
-    out01<- cbind.data.frame(out1,out2,out3,out4)
+    out01<- cbind.data.frame(out1c,out2c,out3c,out4c)
+    colnames(out01)<-coln
     
   } else {
     out01<- data.frame()
@@ -320,17 +368,20 @@ conformalCf_split <- function(X, Y,
     Xtest_grp00 <- Xtest[test_grp00, ,drop=FALSE]
     Ytest_grp00 <- Ytest[test_grp00]
     wttest_grp00 <- wt_test[test_grp00, ,drop=FALSE]
-    out1 <- conformalSplit(X0[[1]],Y0[[1]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,1],
-                           outfun,CQR,wt=ps0[[1]][,4]/ps0[[1]][,1],trainid0[[1]])
+    out1d <- conformalSplit(X0[[1]],Y0[[1]],Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,1],
+                            outfun,CQR,wt=ps0[[1]][,4]/ps0[[1]][,1],trainid0[[1]])
     
-    out2 <- conformalSplit(X0[[2]],Y0[[2]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,2],
-                           outfun,CQR,wt=ps0[[2]][,4]/ps0[[2]][,2],trainid0[[2]])
+    out2d <- conformalSplit(X0[[2]],Y0[[2]],Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,2],
+                            outfun,CQR,wt=ps0[[2]][,4]/ps0[[2]][,2],trainid0[[2]])
     
-    out3 <- conformalSplit(X0[[3]],Y0[[3]], Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,3],
-                           outfun,CQR, wt=ps0[[3]][,4]/ps0[[3]][,3],trainid0[[3]])
-    out4 <- data.frame(lower=Ytest_grp00,upper=Ytest_grp00)
+    out3d <- conformalSplit(X0[[3]],Y0[[3]],Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,3],
+                            outfun,CQR, wt=ps0[[3]][,4]/ps0[[3]][,3],trainid0[[3]])
     
-    out00<- cbind.data.frame(out1,out2,out3,out4) 
+    out4d <- conformalSplit(X0[[4]],Y0[[4]],Xtest_grp00,wttest_grp00[,4]/wttest_grp00[,4],
+                            outfun,CQR,wt=ps0[[4]][,4]/ps0[[4]][,4],trainid0[[4]])
+    
+    out00<- cbind.data.frame(out1d,out2d,out3d,out4d) 
+    colnames(out00)<-coln
     
   } else {
     out00<- data.frame()
@@ -343,31 +394,31 @@ conformalCf_split <- function(X, Y,
   return(out)
 }
 
-
 # -----------------------------------------------------------------------------
 # conformalCf_split()
 # -----------------------------------------------------------------------------
-
-# conformal_ITE1() is the outer func that constructs ITEs
-# It merges counterfactual outcomes into POs.
+# conformal_ITE1() is the outer func that constructs ITE from Y_obs and counterfactuals
 
 # X, Y
-# testid      index of Xtest point in full X. a single index or a numerical vector.
-# tr          vector of individual binary treatments, numeric.
+# testid      index of Xtest point in full X. numerical vector.
+# tr          individual binary treatments, numeric vector.
 # A           spatial network A_ji, in the form of adjacency matrix or distance matrix. 
 # Atype       type of A, "dist" or "adj".
 # ps_pred_model 
+# ps          supply ps if it's known,  diagnostics use only ！
+# G           supply G if it's known, diagnostics use only ！
 # outfun      passed to conformalSplit()
 # CQR         passed to conformalSplit()
-# tranid      optional. list of length 4. trainid for each treatment level.
+# tranid      optional. if supplied, list of length 4. one for each treatment level.
 # retrainYmodel If true, Ymodel retrained for each test point. If false, Ymodel fitted only once to make predictions for all points.
 
-# output      ITEs and average ITEs over marginal treatment propensities.
+# output      ITEs and POs
 
 conformal_ITE1 <- function(X, Y, testid,
                            tr,
                            A, Atype,
                            ps_pred_model="binomial",
+                           ps, G,
                            outfun, CQR=FALSE,trainid=NA,
                            retrainYmodel=TRUE
 ){
@@ -378,17 +429,25 @@ conformal_ITE1 <- function(X, Y, testid,
   m <- length(testid)
   
   # compute joint and marginal propensity scores
-  ps<-get_gps1(tr,covar=X,A,Atype,pstype="joint",ps_pred_model) # df n*6/ 4
+  if (is.na(ps)){
+    ps<-get_gps1(tr,covar=X,A,Atype,pstype="joint",ps_pred_model) # df n*6/ 4
+  } else {ps=ps}
+  
   # compute counterfactuals
-  trnei<-get_trnei1(tr,A,Atype)
+  if (is.na(G)){
+    trnei<-get_trnei1(tr,A,Atype)
+  } else {trnei=G}
+  
   tl <- paste0("t",tr,trnei) # tls ("t00","t01","t10","t11")
+  Xnei<-get_Xnei(covar=X,A=A,Atype=Atype)
+  X <- cbind.data.frame(X,Xnei)
   
   if (retrainYmodel==TRUE) {
     for (i in 1:m){
       Ztest <- tr[testid[i]] 
       Gtest <- trnei[testid[i]] 
       tltest <- paste0("t",Ztest,Gtest) 
-      wt_test<- ps[testid[i], ,drop=FALSE] # 4 cols
+      wt_test<- ps[testid[i], ,drop=FALSE] # 4/6 cols
       
       #if(tltest=="t11"){wt_test<- ps[testid[i],1]
       #} else if (tltest=="t10") {wt_test<- ps[testid[i],2]
@@ -398,13 +457,8 @@ conformal_ITE1 <- function(X, Y, testid,
       Xtest <- X[testid[i], ,drop=FALSE]
       Ytest <- Y[testid[i]]
       
-      #wt_diagnostics <- 1
-      #ps_diagnostics <- data.frame(rep(1:n),rep(1:n),rep(1:n),rep(1:n))
-      
       if(is.na(trainid)){
         Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_test,tl,outfun,CQR,ps=ps,trainid=NA)
-        #Cf_params<-list(X,Y,Xtest,Ytest,tltest,wt_diagnostics,tl,outfun,CQR,
-        # ps=ps_diagnostics,trainid=NA)
       } else {  stop("If trainid not provided, please input NA.")
       }
       # customized trainid under development
@@ -418,7 +472,8 @@ conformal_ITE1 <- function(X, Y, testid,
                            direct1_up=PO_temp[[2]] - PO_temp[[5]],
                            direct0_lo=PO_temp[[3]] - PO_temp[[8]],
                            direct0_up=PO_temp[[4]] - PO_temp[[7]] )
-      PO[[i]]<-PO_temp
+      PO[[i]]<-PO_temp 
+      # to check: is the col order of PO_temp wrong? PO seems to have cols mixed up
     }
     ITE <- do.call("rbind", ITE)
     
@@ -455,7 +510,5 @@ conformal_ITE1 <- function(X, Y, testid,
   PO <- do.call(rbind,PO)
   return (list(PO,ITE))
 }
-
-
 
 

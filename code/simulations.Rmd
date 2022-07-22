@@ -9,15 +9,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Method performance on linear/ heteroskadestic/ spatial non-stationary data are demonstrated. The measure of performance is coverage (the rate at which the prediction interval correctly cover the true outcome). Average coverage is computed by repeating the experiment 100 times. Conditional coverage is coverage conditional on X values, it can also be calculated from results of the repeated experiments, although more runs are needed. Conformalised quantile regression provides better conditional coverage as the predicton intervals are adaptive to X. In comparison, conformalised mean prediction models produce same length intervals for all X, so conditional coverage may be poor even if average coverage achieves the target level.
+Measurement of performance:
+Method performance on linear/ heteroskadestic/ spatial non-stationary data are demonstrated. The measure of performance is coverage (the rate at which the prediction interval correctly cover the true outcome). Distribution of average coverage is computed by repeating the experiment 100 times. Conditional coverage is coverage conditional on X values. Conformalised quantile regression provides better conditional coverage as the predicton intervals are adaptive to X. In comparison, conformalised mean prediction models produce same length intervals for all X, so conditional coverage may be poor even if average coverage achieves the target level.
 
 
-
-
-```{r}
+```{r, eval=FALSE}
 #library(gstat)
 #library(fields)
 #library(sp)
+
 library(igraph)
 library(tidyverse)
 library(ggplot2)
@@ -32,64 +32,73 @@ library(bartMachine)
 ```
 
 
-```{r}
-# source("utils.R")
-# source("gps_weightedconformal.R")
+```{r, eval=FALSE}
+ source("utils.R")
+ source("gps_weightedconformal.R")
 ```
 
 # Generating non-spatial data
 
-## linear
-```{r data_ns_1 }
+## dataset_1
+```{r data_ns_1 , eval=FALSE}
 # non-spatial data, 
 # linear treatment effect.
 set.seed(123)
-n <- 1000
+n <- 5000
 d <- 5
-X_ns_1 <- matrix(rnorm(n * d), nrow = n) # V1-V5
+# X_ns_1 <- matrix(rnorm(n * d), nrow = n) # norm
+ X_ns_1 <- matrix(runif(n * d,-3,3), nrow = n, ncol = d) # unif [-3,3]
 beta_ns_1 <- rep(1, 5)
 Y1_ns_1 <- X_ns_1 %*% beta_ns_1 + rnorm(n)
-# plot(X_ns_1[, 1],Y1_ns_1)
-#hist(Y1_ns_1)
+plot(X_ns_1[, 2],Y1_ns_1,cex=.5)
+# hist(Y1_ns_1)
 Y0_ns_1 <- rnorm(n)
-ps_ns_1 <- pnorm(X_ns_1[, 1]) # one confounder
-# ps_ns_1 <- (1 + pbeta(X_ns_1[, 1], 2, 4)) / 4
-# hist(ps_ns_1)
-# plot(X_ns_1[, 1],ps_ns_1)
-T_ns_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
+
+# ps_ns_1 <- (1 + pbeta(X_ns_1[, 1], 2, 4)) / 4 # [0.25,0.5] ?
+# T_ns_1 <- as.numeric(runif(n) < ps_ns_1) # ???
+ 
+ ps_ns_1 <- pnorm(X_ns_1[, 1]) 
+ T_ns_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
+# hist(ps_ns_1) # largely away from 0.5, good
 # hist(T_ns_1)
+# plot(X_ns_1[, 1],ps_ns_1)
+# plot(ps_ns_1,T_ns_1)
 # plot(X_ns_1[, 1],T_ns_1)
 Y_ns_1 <- ifelse(T_ns_1 == 1, Y1_ns_1, Y0_ns_1)
 # plot(Y0_ns_1,Y_ns_1)
-save(Y_ns_1,Y1_ns_1,Y0_ns_1,X_ns_1,T_ns_1,ps_ns_1,file="datans1.Rdata")
+save(Y_ns_1,Y1_ns_1,Y0_ns_1,X_ns_1,T_ns_1,ps_ns_1,file="datans1_5k.Rdata")
 ```
 
-## heteroskadestic and non-linear
-The covariates $X_{ij}$ are i.i.d. generated from $\mathrm{Unif}([0, 1])$ , $Y_{i}(0)=\epsilon_{i}$, $\mathbb{E}[Y_{i}(1) \mid X_{i}] = f(X_{i1})f(X_{i2})$ , where $f(x) = \frac{2}{1 + \exp(-12(x - 0.5))}$. $Y_{i}(1) = \mathbb{E}[Y_{i}(1) \mid X_{i}] + \epsilon_{i}$ where $\epsilon_{i}\stackrel{i.i.d.}{\sim}N(0, 1)$. 
+## dataset_2
+ 
+Generation of Y is non-linear.
 
-The propensity score $e(x)=P(T_{i} = 1\mid X_{i} = x)$ is set as $e(x) = \frac{1}{4}(1 + \beta_{2, 4}(x))$ where $\beta_{2, 4}(x)$ is the cdf of the Beta-distribution with parameters 2 and 4.
-```{r data_ns_2}
+```{r data_ns_2, eval=FALSE}
 # non-spatial data, 
 # heteroskadestic.
 set.seed(123)
-n <- 1000
+n <- 5000
 d <- 5
 X_ns_2 <- X_ns_1 
 genY_ns_2 <- function(X){
-  2 / (1+exp(-12*(X[, 1]-0.5)))*2/(1+exp(-12*(X[, 2]-0.5)))+rnorm(n)
+  (2 / (1+exp(-12*(X[, 1]-0.5))))*(2/(1+exp(-12*(X[, 2]-0.5))))+rnorm(n)
   }
 Y1_ns_2 <- genY_ns_2(X_ns_2) 
 # hist(Y1_ns_2)
-# plot(X_ns_2[, 1],Y1_ns_2)
+plot(X_ns_2[, 1],Y1_ns_2,cex=.5) 
+
 Y0_ns_2 <- rnorm(n)
-ps_ns_2 <- (1 + pbeta(X_ns_2[, 1], 2, 4)) / 4
-T_ns_2 <- sapply(ps_ns_2,function(x){rbinom(1,1,prob=x)}) 
+ps_ns_2 <- ps_ns_1 
+T_ns_2 <- sapply(ps_ns_2,function(x){rbinom(1,1,prob=x)})
+
+hist(T_ns_2)
 # plot(X_ns_2[, 1],T_ns_2)
 # T_ns_2 <- map_dbl(1:n,function(x){rbernoulli(n=1,ps_ns_2[x])}) 
 # T_ns_2 <- as.numeric(ps_ns_2 > runif(n)) 
 Y_ns_2 <- ifelse(T_ns_2 == 1, Y1_ns_2, Y0_ns_2)
 # plot(Y0_ns_2,Y_ns_2)
-save(Y_ns_2,Y1_ns_2,Y0_ns_2,X_ns_2,T_ns_2,ps_ns_2,file="datans2.Rdata")
+
+save(Y_ns_2,Y1_ns_2,Y0_ns_2,X_ns_2,T_ns_2,ps_ns_2,file="datans2_5k.Rdata")
 ```
 
 
@@ -100,14 +109,23 @@ Spatial network data is generated in the following way: Step 1. n points are ran
 Following this procedure, the X of the units are spatially random with no autocorrelation or spatial dependence. There is no unmeasured spatial confounding, conditional ignorability still holds. Interference is defined according to the spatial network structure, where each unit's outcome is dependent on its first-order neighbors' treatment. Further, non-stationarity can be introduced in several places, for example, in the determining function of Y, in the dependence between neighbors, or in the treatment propensity.
 
 ##  net1. Map data_ns_1 to random network. save potential outcomes.
-```{r}
-n <- 1000
+```{r gen_nt, eval=FALSE}
+n <- 5000
 # generate net1 and map data_ns_1 to net1
 # net1 <- sample_gnp(n,p=0.1,directed=FALSE,loops=FALSE) # non-spatial graph
-net1<-igraph::sample_grg(n,radius=0.05,torus=FALSE,coords=TRUE) # spatial graph
-# saveRDS(net1,file="net1_structure.Rdata") 
-# plot(net1,vertex.size = 3,vertex.label = NA)
-# hist(degree(net1)) # mostly between 2-12 first-order neighbours
+net1<-igraph::sample_grg(n,radius=0.03,torus=FALSE,coords=TRUE) # spatial graph
+
+plot(net1,vertex.size = 2,vertex.label = NA,
+     axes=TRUE,margin=c(0,0,0,0),main="net1 structure")
+hist(degree(net1)) # mostly between 5-20 first-order neighbours
+# saveRDS(net1,file="net1_5k_structure.Rdata") 
+```
+
+
+
+```{r nt1_a, eval=FALSE}
+# this is for the realistic case, where G will be guessed based on mean(Znei)
+
 g1 <- igraph::as_data_frame(net1,what="vertices")# coords in (x, y)
 colnames(g1)<-c("coordx","coordy")
 g1$Z <- T_ns_1
@@ -133,23 +151,165 @@ Y10_nt_1<-YZ1_nt_1+YG0_nt_1
 Y11_nt_1<-YZ1_nt_1+YG1_nt_1
 
 # actual outcome
+X_nt_1<-X_ns_1
+A_adj<-as_adjacency_matrix(net1)
+A<-as.matrix(A_adj)
+Z_nt_1<-g1$Z
+G_nt_1<-ifelse(g1$G >0.5, 1, 0)
+T_nt_1<-paste0("t",Z_nt_1,G_nt_1)
 g1$YG <- ifelse(g1$G >0.5, g1$YG, 0)
 Y_nt_1<-g1$YZ+g1$YG 
 #hist(YG1_nt_1)
 
-X_nt_1<-X_ns_1
+# Compute gps later and check balance.
+save(A_adj,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1a_5k.Rdata")
+
+# rethink:
+# some issues remain in determining YG , and what is the true ps for G=1
+# for each unit its neighborhood allocation is observed once, how to defined P(G=1|X)
+# also, if G is determined by ps_g, how to infer G when only Z is observed.
+
+# test prediction of Z and G
+ps_est_nt_1z <-glm.fit(x=X_nt_1,y=Z_nt_1,family=binomial())
+ps_est_nt_1z <-ps_est_nt_1z$fitted.values
+X_nt_1g <- get_Xnei(X_nt_1,A,"adj")
+ps_est_nt_1g <-glm.fit(x=X_nt_1g,y=G_nt_1,family=binomial())
+ps_est_nt_1g <-ps_est_nt_1g$fitted.values
+
+par(mfrow=c(2,1))
+plot(ps_est_nt_1z,Z_nt_1,xlab="Z estimate",ylab="Z")
+plot(ps_est_nt_1z,Z_nt_1,xlab="G estimate",ylab="G")
+```
+
+
+```{r nt1_b, eval=FALSE}
+# this is for the diagnostic case where known ps_zg are fed into split cf to recover POs under interference.
+
+# note: technically P(z=1,g=1)=Pz(z=1|Xz)*Pg(G=1|z=1,Xnei)*C.
+# C=Pr(this specific combination of z & g, are actually paired)
+# if X is spatially random, C is a constant. taking ratios of ps is not affected.
+# if X is spatially patterned. C=f(X) is a function of X(pho,W,rand_x). ratios of ps should consider this dependence on spatial pattern of X.
+
+# try determine G and/or YG differently
+# Generally, it's not easy to estimate G=mean(Z[nei]) or YG =mean(YZ[nei]) with mean(X[nei]).
+# but with nt_1 data, YZ and YG are just sums of X.
+
+g1 <- igraph::as_data_frame(net1,what="vertices")# coords in (x, y)
+colnames(g1)<-c("coordx","coordy")
+g1$Z <- T_ns_1
+g1$YZ <-Y_ns_1
+g1$G <- 0
+g1$YG <- 0
+
+for (i in 1:n){
+    neigh = igraph::neighbors(net1,v = i)
+    g1$G[i] =  mean(g1$Z[neigh]) # mean exposure, can also use inverse dist w
+    g1$YG[i] = mean(g1$YZ[neigh]) # neighborhood spillover YG
+}
+#hist(g1$YG)
+
+# can try define G1 differently instead of using mean(Z[nei])
+# g1$G1 <- gen_YG(Xnei,A)
+
+# all POs. technically speaking this is a bit problematic...
+YG1_nt_1<-g1$YG # basically = mean(Xnei) 
+YG0_nt_1<-0
+YZ1_nt_1<-Y1_ns_1 # mean(X)
+YZ0_nt_1<-Y0_ns_1
+
+Y00_nt_1<-YZ0_nt_1+YG0_nt_1
+Y01_nt_1<-YZ0_nt_1+YG1_nt_1
+Y10_nt_1<-YZ1_nt_1+YG0_nt_1
+Y11_nt_1<-YZ1_nt_1+YG1_nt_1
+# the definition of YG1 may be problematic. The functional between G=1 and YG1 is not clear. Maybe can define YG1 as a function of Xz? Xnei[,1]?
+# or maybe define Y_zg directly based on the aggregate level of z and g, instead of using the spillover of YG (which is technically spillover the outcome, not spillover of treatment and should be discussed/ tested separately)
+
+# propensities and realised outcome
 A_adj<-as_adjacency_matrix(net1)
-Z_nt_1<-g1$Z
-G_nt_1<-ifelse(g1$G >0.5, 1, 0)
+A<-as.matrix(A_adj)
+
+Xnei_nt_1 <- get_Xnei(X_ns_1,A,"adj")
+hist(Xnei_nt_1[,1]) 
+
+ps_nt_1g <- pnorm(Xnei_nt_1[,1]) 
+# plot(Xnei_nt_1[,1],ps_nt_1g,cex=.5)
+ps_nt_1z <- ps_ns_1
+ps_nt_1_11 <- ps_nt_1z*ps_nt_1g
+ps_nt_1_10 <- ps_nt_1z*(1-ps_nt_1g)
+ps_nt_1_01 <- (1-ps_nt_1z)*ps_nt_1g
+ps_nt_1_00 <- (1-ps_nt_1z)*(1-ps_nt_1g)
+ps_nt_1sum <- data.frame(t11=ps_nt_1_11,t10=ps_nt_1_10,t01=ps_nt_1_01,t00=ps_nt_1_00,
+                         z=ps_nt_1z,g=ps_nt_1g)
+
+
+G_nt_1 <- sapply(ps_nt_1g,function(x){rbinom(1,1,prob=x)})
+g1$YG <- ifelse(G_nt_1==1, g1$YG, 0)
+Y_nt_1<-g1$YZ+g1$YG 
+#hist(YG1_nt_1)
+
+# summarise and save data
+X_nt_1<-X_ns_1
+Z_nt_1<-g1$Z # Z_nt_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
 T_nt_1<-paste0("t",Z_nt_1,G_nt_1)
 
 # Compute gps later and check balance.
-save(A_adj,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1.Rdata")
+# save(A,ps_nt_1sum,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1b_5k.Rdata")
+```
+
+
+```{r nt1_c, eval=FALSE}
+# this is different from nt1_b in the generation of YG
+# previoussly YG=mean(neighbors' YZ). This is in effect a spillover of outcome
+# for spillover of treatment, strictly speaking, YG should be generated from the same mechanism producing GZ, just with added G level to the Z level.
+
+# all POs.
+YG1_nt_1<-0.5*Y1_ns_1 # same DGP of YZ: Y1_ns_1 = X_ns_1 %*% beta_ns_1 + rnorm(n)
+YG0_nt_1<-0
+YZ1_nt_1<-Y1_ns_1 # mean(X)
+YZ0_nt_1<-Y0_ns_1
+
+Y00_nt_1<-YZ0_nt_1+YG0_nt_1
+Y01_nt_1<-YZ0_nt_1+YG1_nt_1
+Y10_nt_1<-YZ1_nt_1+YG0_nt_1
+Y11_nt_1<-YZ1_nt_1+YG1_nt_1
+# the definition of YG1 may be problematic. The functional between G=1 and YG1 is not clear. Maybe can define YG1 as a function of Xz? Xnei[,1]?
+# or maybe define Y_zg directly based on the aggregate level of z and g, instead of using the spillover of YG (which is technically spillover the outcome, not spillover of treatment and should be discussed/ tested separately)
+
+# propensities and realised outcome
+A_adj<-as_adjacency_matrix(net1)
+A<-as.matrix(A_adj)
+
+Xnei_nt_1 <- get_Xnei(X_ns_1,A,"adj")
+#Xnei_mean <- mean(Xnei_nt_1)
+#hist(Xnei_nt_1[,1]) 
+
+ps_nt_1g <- pnorm(Xnei_nt_1[,1]) 
+# plot(Xnei_nt_1[,1],ps_nt_1g,cex=.5)
+ps_nt_1z <- ps_ns_1
+ps_nt_1_11 <- ps_nt_1z*ps_nt_1g
+ps_nt_1_10 <- ps_nt_1z*(1-ps_nt_1g)
+ps_nt_1_01 <- (1-ps_nt_1z)*ps_nt_1g
+ps_nt_1_00 <- (1-ps_nt_1z)*(1-ps_nt_1g)
+ps_nt_1sum <- data.frame(t11=ps_nt_1_11,t10=ps_nt_1_10,t01=ps_nt_1_01,t00=ps_nt_1_00,
+                         z=ps_nt_1z,g=ps_nt_1g)
+
+
+G_nt_1 <- sapply(ps_nt_1g,function(x){rbinom(1,1,prob=x)})
+YG_nt_1 <- ifelse(G_nt_1==1,YG1_nt_1, 0)
+Y_nt_1<-Y_ns_1+YG_nt_1 
+#hist(YG1_nt_1)
+
+# summarise and save data
+X_nt_1<-X_ns_1
+Z_nt_1<-T_ns_1 # Z_nt_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
+T_nt_1<-paste0("t",Z_nt_1,G_nt_1)
+
+# save(A,ps_nt_1sum,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1b_5k.Rdata")
 ```
 
 
 ##  net2. Map data_ns_2 to same random network as net1.save potential outcomes.
-```{r}
+```{r nt2, eval=FALSE}
 # map data_ns_2 to net1, with updated Z, G, YZ, YG, Y
 g2<-g1
 g2$Z <- T_ns_2
@@ -163,7 +323,7 @@ for (i in 1:n){
 }
 # all POs.
 YG1_nt_2<-g2$YG
-YG0_nt_2<-0
+YG0_nt_2<-0 # 0 or white noise?
 YZ1_nt_2<-Y1_ns_2
 YZ0_nt_2<-Y0_ns_2
 
@@ -173,19 +333,28 @@ Y10_nt_2<-YZ1_nt_2+YG0_nt_2
 Y11_nt_2<-YZ1_nt_2+YG1_nt_2
 
 # actual outcome
-g2$YG <- ifelse(g2$G >0.5, g2$YG, 0)
+Xnei_nt_2 <- get_Xnei(X_ns_2,A,"adj")
+ps_nt_2g <- pnorm(Xnei_nt_2[,1]) # hist(ps_nt_1g)
+ps_nt_2z <- ps_ns_2
+ps_nt_2_11 <- ps_nt_2z*ps_nt_2g
+ps_nt_2_10 <- ps_nt_2z*(1-ps_nt_2g)
+ps_nt_2_01 <- (1-ps_nt_2z)*ps_nt_2g
+ps_nt_2_00 <- (1-ps_nt_2z)*(1-ps_nt_2g)
 
+G_nt_2 <- sapply(ps_nt_2g,function(x){rbinom(1,1,prob=x)})
+g2$YG <- ifelse(G_nt_2==1, g2$YG, 0)
 Y_nt_2<-g2$YZ+g2$YG 
+
 X_nt_2<-X_ns_2
 # A_adj 
 Z_nt_2<-g2$Z
-G_nt_2<-ifelse(g2$G >0.5, 1, 0)
 T_nt_2<-paste0("t",Z_nt_2,G_nt_2)
-save(Y00_nt_2,Y01_nt_2,Y10_nt_2,Y11_nt_2,Y_nt_2,X_nt_2,Z_nt_2,G_nt_2,T_nt_2,file="datanet2.Rdata")
+save(ps_nt_2g,ps_nt_2z,Y00_nt_2,Y01_nt_2,Y10_nt_2,Y11_nt_2,Y_nt_2,X_nt_2,Z_nt_2,G_nt_2,T_nt_2,file="datanet2_5k.Rdata")
 ```
 
+
 ## net3. add spatial non-stationarity in y=f_beta(x) to net2 outcome YZ.
-```{r}
+```{r nt3, eval=FALSE}
 set.seed(123)
 # outcome Y_i(Z=1) is dependent on location of i ,
 # in the form of spatially varying coeff in generating Y(Z=1)
@@ -209,10 +378,6 @@ coeff<-data.frame(floor(g1$coordx*100)+1,floor(g1$coordy*100)+1)
 colnames(coeff)<-c("x","y")
 coeff$xy<-paste0(coeff$x,"-",coeff$y)
 coeff<-left_join(coeff,sim[,c(1,2,5)],by="xy")
-
-# sanity checks
-# mapcheck<-cbind.data.frame(coeff$x,coeff$y,X_ns_1,Z_nt_3,G_nt_3,Y_nt_3)
-# ggplot(coeff,aes(x=x,y=y,color=coeff1))+geom_point(size=3)+scale_colour_gradient2()
 
 genY_nt_3 <- function(X){
   2 / (1 + exp(coeff$coeff1*(X[, 1]-0.5)))*2/(1 + exp(-1 *(X[, 2] - 0.5)))+rnorm(n)
@@ -251,41 +416,60 @@ T_nt_3<-paste0("t",Z_nt_3,G_nt_3)
 save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3.Rdata")
 ```
 
+```{r net3_plots, eval=FALSE}
+# the spatial fields
+spplot(coeff_grid)
 
-(4) net4. With network autocorrelation. This may affect the design of conformal prediction (As long as sampling is random, exchangeability still approximately holds. If there's a spatial pattern in Y, modeling it may help increase outcome prediction accuracy in the face of unmeasured spatial confounding ). Otherwise it should not make a difference for causal identification, since we assume conditional ignorability.
-```{r}
+# X, Y, Z and G
+# mapcheck<-cbind.data.frame(x=coeff$x,y=coeff$y,X_ns_1,Z_nt_3,G_nt_3,Y_nt_3)
+ggplot(mapcheck,aes(x=x,y=y,color=`1`))+geom_point(size=3)+scale_colour_gradient2()
+ggplot(mapcheck,aes(x=x,y=y,color=Y_nt_3))+geom_point(size=3)+scale_colour_gradient2()
+ggplot(mapcheck,aes(x=x,y=y,color=Z_nt_3))+geom_point(size=3)+scale_colour_gradient2()
+ggplot(mapcheck,aes(x=x,y=y,color=G_nt_3))+geom_point(size=3)+scale_colour_gradient2()
+ggplot(coeff,aes(x=x,y=y,color=coeff1))+geom_point(size=3)+scale_colour_gradient2()
 
 ```
+
+(4) net4. With network autocorrelation. This may affect the design of conformal prediction (As long as sampling is random, exchangeability still approximately holds. If there's a spatial pattern in Y, modeling it may help increase outcome prediction accuracy in the face of unmeasured spatial confounding ). Otherwise it should not make a difference for causal identification, since we assume conditional ignorability.
+
 
 
 # testing the estimation of GPS
 
-```{r testid}
-# testing point, one index from 1:n
-testid0<- sample(n,1) # 832
+```{r testid, eval=FALSE}
+
+testid0<- sample(n,1) # 694
 ```
 
 
-```{r test1}
+```{r test1, eval=FALSE}
 # binary treatment, 4 level exposure, getting GPS and test balance
 A<-as.matrix(A_adj)
 
 # glm predictions
 test1_gps1 <- get_gps1(tr = Z_nt_1,covar = X_nt_1,A = A,Atype="adj",
                     pstype="joint",ps_pred_model="binomial")
-# check p(z=1) 
-hist(test1_gps1[,5]) # should be roughly uniform[0,1]
-plot(ps_ns_1,test1_gps1[,5],xlab="Z",ylab="Z estimate")  # pretty close
-# check p(g=1)
-# p(g=1) should roughly center around 0.5, because neighborhood assignment and spatial distribution of Z is random.
-hist(test1_gps1[,6]) # a bit flat
+
+# check estimate of ps for Z and G
+par(mfrow=c(1,2))
+plot(ps_nt_1z,test1_gps1[,5],xlab="ps_Z",ylab="ps_Z estimate",cex=.3)
+plot(ps_nt_1g,test1_gps1[,6],xlab="ps_G",ylab="ps_G estimate",cex=.3)
+
+par(mfrow=c(2,2))
+plot(ps_nt_1_11,test1_gps1[,1],xlab="ps_11",ylab="ps_11 estimate",cex=.3)
+plot(ps_nt_1_10,test1_gps1[,2],xlab="ps_10",ylab="ps_10 estimate",cex=.3)
+plot(ps_nt_1_01,test1_gps1[,3],xlab="ps_01",ylab="ps_01 estimate",cex=.3)
+plot(ps_nt_1_00,test1_gps1[,4],xlab="ps_00",ylab="ps_00 estimate",cex=.3)
+
 par(mfrow=c(2,1))
 plot(test1_gps1[,5],Z_nt_1)
 plot(test1_gps1[,6],G_nt_1)
 
-
-# check gps and balance
 hist(test1_gps1[,1]) # why this shape?
+
+```
+
+```{r, eval=FALSE}
 # nnet::multinom predictions
 test1_gps2 <- get_gps1(tr = Z_nt_1,covar = X_nt_1,A = A,Atype="adj",
                     pstype="joint",ps_pred_model="multinom")
@@ -304,7 +488,16 @@ plot(test1_gps1[,3],test1_gps2[,3],xlab="T01 binom est",ylab="T01 mult est")
 plot(test1_gps1[,4],test1_gps2[,4],xlab="T00 binom est",ylab="T00 mult est")
 
 
-check<-data.frame(T_nt_1,test1_gps3) # T predictions only 50% accurate
+#check<-data.frame(T_nt_1,test1_gps3) # T predictions only 50% accurate
+
+```
+
+```{r, eval=FALSE}
+# boosting 
+# similar problem as others
+# gbm.predict 
+# type="response" returns probabilities for binomial and counts for poisson
+# type="link" return log odds for binomial
 
 ```
 
@@ -393,6 +586,12 @@ test2_pred2 <- conformalSplit(X=X_ns_2_tr, Y=Y1_ns_2_tr, test22Xtest,test22wttes
                           alpha=0.1)
 data.frame(Y1=Y1_ns_2[c(983,984,987,989:991,994,998:1000)],test2_pred2) 
 # 90% coverage
+
+# QRF model outputs matrix of col2
+r2 <- grf::quantile_forest(X = X_ns_1_tr, Y=Y1_ns_1_tr,quantiles = c(0.05,0.95))
+r2y <- predict(r2, test22Xtest,quantiles = c(0.05,0.95))
+r2y <- r2y$predictions
+r2y[,1]
 ```
 
 
@@ -401,8 +600,21 @@ data.frame(Y1=Y1_ns_2[c(983,984,987,989:991,994,998:1000)],test2_pred2)
  
 ps_est_ns_1 <-glm.fit(x=X_ns_1,y=T_ns_1,family=binomial())
 ps_est_ns_1 <-ps_est_ns_1$fitted.values
+ps_est_ns_11 <- gbm::gbm(Y ~ .,distribution="bernoulli",
+                         data=data.frame(Y=T_ns_1,X_ns_1), n.trees = 100)
+ps_est_ns_11 <-predict(ps_est_ns_11, data.frame(X_ns_1), type = "response", n.trees = 100)
 ps_est_ns_2 <-glm.fit(x=X_ns_2,y=T_ns_2,family=binomial())
 ps_est_ns_2 <-ps_est_ns_2$fitted.values
+ps_est_ns_22 <- gbm::gbm(Y ~ .,distribution="bernoulli",
+                         data=data.frame(Y=T_ns_2,X_ns_2), n.trees = 100)
+ps_est_ns_22 <-predict(ps_est_ns_22, data.frame(X_ns_2), type = "response", n.trees = 100)
+
+# how good is the estimate
+par(mfrow=c(2,2))
+plot(ps_ns_1,ps_est_ns_1, ylab="glm estimate") # good
+plot(ps_ns_1,ps_est_ns_11, ylab="gbm estimate") # not so good
+plot(ps_ns_2,ps_est_ns_2, ylab="glm estimate") # glm estimate not good
+plot(ps_ns_2,ps_est_ns_22, ylab="gbm estimate") # boosting estimate OKish
 
 # use estimated ps
 test22wttest<-ps_est_ns_1[c(984:989,997:1000)]
@@ -419,10 +631,10 @@ data.frame(Y1=Y1_ns_1[c(984:989,997:1000)],test22_pred1)
 # 90% coverage
 
 
-test22wttest<-ps_est_ns_2[c(983,984,987,989:991,994,998:1000)]
+test22wttest<-ps_est_ns_22[c(983,984,987,989:991,994,998:1000)]
 test22wttest<-(1-test22wttest)/test22wttest
 inds1<-which(T_ns_2==1)
-ps_ns_2_tr <- ps_est_ns_2[inds1]
+ps_ns_2_tr <- ps_est_ns_22[inds1]
 ps_ns_2_tr <-(1-ps_ns_2_tr)/ps_ns_2_tr
 test2_pred2 <- conformalSplit(X=X_ns_2_tr, Y=Y1_ns_2_tr, test22Xtest,test22wttest,
                           outfun="QRF", 
@@ -430,15 +642,49 @@ test2_pred2 <- conformalSplit(X=X_ns_2_tr, Y=Y1_ns_2_tr, test22Xtest,test22wttes
                           trainid=sample(356,210),
                           alpha=0.1)
 data.frame(Y1=Y1_ns_2[c(983,984,987,989:991,994,998:1000)],test2_pred2) 
-# 80% coverage
+# 80% coverage with glm estimated ps
+# 90% coverage with gbm estimated ps
 ```
 
 
+```{r}
+T_nt_1[980:1000]
+
+test23Xtest<-as.data.frame(X_nt_1[c(991,999),,drop=FALSE]) # obs t00 predict t11
+test23wttest<-ps_nt_1[c(991,999),,drop=FALSE]
+test23wttest<-test23wttest[,1]/test23wttest[,4]
+
+inds11<-which(T_nt_1=="t11") # length(inds11) # 1316
+X_nt_1_tr<-X_nt_1[inds11,,drop=FALSE]
+Y_nt_1_tr<-Y_nt_1[inds11]
+ps_nt_1_tr <- ps_nt_1sum[inds11,,drop=FALSE]
+
+ps_nt_1_tr <-(ps_nt_1_tr[,1])/(ps_nt_1_tr[,4])
+quantile(ps_nt_1_tr,0.8) # 192
+ps_nt_1_tr <-pmin(ps_nt_1_tr,400)
+
+head(ps_nt_1_tr )
+hist(ps_nt_1_tr) 
+
+# some very extreme values. problem? why?
+
+test2_pred3 <- conformalSplit(X=X_nt_1_tr, Y=Y_nt_1_tr, test23Xtest,test23wttest,
+                          outfun="QRF", 
+                          wt=ps_nt_1_tr,CQR=TRUE,
+                          trainid=sample(1316,700),
+                          alpha=0.1)
+head(test2_pred3)
+Y_nt_1[c(991,999)]
+# correct coverage but interval too wide
+```
+
 # Testing spatial conformal for interference
+
+
 
 ## testing that the counterfactual prediction works
 
-```{r}
+```{r, eval=FALSE}
 # generate gps
 ps_nt_1 <-get_gps1(tr = Z_nt_1,covar = X_nt_1, A = A,Atype="adj",
                     pstype="joint",ps_pred_model="binomial")
@@ -449,14 +695,16 @@ ps_nt_3 <- get_gps1(tr = Z_nt_3,covar = X_nt_3,A = A,Atype="adj",
 ```
 
 
-spatial linear
-```{r test3}
-# spatial CF for counterfactual prediciton
 
-# testid0 694
+spatial linear
+```{r test3, eval=FALSE}
+# spatial CF for counterfactual prediciton
+#using estimated ps
+
+# testid0 694, t00
 X_nt_1Xtest <- X_nt_1[694, ,drop=FALSE]
 Y_nt_1Ytest <- Y_nt_1[694]
-t_nt_1tltest <- T_nt_1[694] # t00
+t_nt_1tltest <- T_nt_1[694] 
 ps_nt_1wttest <- ps_nt_1[694, ,drop=FALSE] # 0.1838537 0.03723567 0.6477272 0.1311834
 
 # POs -1.53466548 -2.17921463  0.06519143 -0.57935773
@@ -469,11 +717,11 @@ test3_pred <- conformalCf_split(X=X_nt_1, Y=Y_nt_1,
                               ps=ps_nt_1, trainid=NA) 
 
 # 0.6150179	0.3269671	-1.10851	-1.028818	1.179497	-0.01783523	-0.5793577 -0.5793577
-# 33% coverage
+# 33% cover
 ```
 
 spatial heteroskadestic
-```{r test4}
+```{r test4, eval=FALSE}
 # spatial CF for counterfactual prediciton
 
 X_nt_2Xtest <- X_nt_2[694, ,drop=FALSE]
@@ -495,7 +743,7 @@ test4_pred<-conformalCf_split(X=X_nt_2, Y=Y_nt_2,
 ```
 
 spatial heteroskadestic, non-stationary
-```{r test5}
+```{r test5, eval=FALSE}
 # spatial CF for counterfactual prediciton
 
 X_nt_3Xtest <- X_nt_3[694, ,drop=FALSE]
@@ -519,15 +767,15 @@ test5_pred<-conformalCf_split(X=X_nt_3, Y=Y_nt_3,
 ```
 
 
-## compute spatial PO (with interference) coverage
+## compute spatial PO (with interference) coverage, with estimated ps
 
-For computing coverage, experiments are rerun 100 times. Plot the confidence intervals against true value as summary the coverage.
+For computing coverage, experiments are rerun 100 times. 
 test6 (spatial linear) 
 test7 (spatial heteroskadestic) 
 test8 (spatial heteroskadestic non-stationary).
 
 
-```{r compute_coverage}
+```{r compute_coverage, eval=FALSE}
 
 # test6
 
@@ -539,13 +787,14 @@ test8 (spatial heteroskadestic non-stationary).
 # ! atm use retrainYmodel=TRUE, so that the order of outputs will not be scrambled.
 # also... retrainYmodel=FALSE has got an issue !
 
-testid6 <- sample(1000,30) # n=30, run time: QRF 14s , QBART 110s
+testid6 <- sample(5000,30) # n=30, run time: QRF 14/ 90s , QBART 110s
   
 test6_res<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
                               testid=testid6,
                               tr=Z_nt_1,
                               A=A,Atype="adj",
-                              ps_pred_model="binomial",
+                              ps_pred_model="multinom",
+                              ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
                               retrainYmodel=TRUE)
 test6_PO <- test6_res[[1]]
@@ -553,36 +802,114 @@ test6_PO <- test6_res[[1]]
 # check prediction against 'true' (as in one realisation of) PO
 # test6_tl<-T_nt_3[testid6] 
 T_nt_1[testid6] 
+Y_nt_1[testid6[26]]
+T_nt_1[testid6[26]] 
+# for test point 26 true T=t11, estimated That=t10, 
+# to boost coverage, Y_That should also be predicted instead of just using Yobs
+
 test6_Y <- data.frame(Y11=Y11_nt_1[testid6],
                       Y10=Y10_nt_1[testid6],
                       Y01=Y01_nt_1[testid6],
                       Y00=Y00_nt_1[testid6])
 
-# coverage
-cov1 <- abs(test6_PO[,2]-test6_PO[,1]) - max(abs(test6_Y [,1]-test6_PO[,1]),
+# coverage with estimated G and ps
+cov1 <- abs(test6_PO[,2]-test6_PO[,1]) - pmax(abs(test6_Y [,1]-test6_PO[,1]),
                                             abs(test6_Y [,1]-test6_PO[,2]))
-which(cov1>0) # 0% cover
+length(which(cov1>0))/length(cov1) # 83% cover
 
-cov2 <- abs(test6_PO[,4]-test6_PO[,3]) - max(abs(test6_Y [,2]-test6_PO[,3]),
+cov2 <- abs(test6_PO[,4]-test6_PO[,3]) - pmax(abs(test6_Y [,2]-test6_PO[,3]),
                                             abs(test6_Y [,2]-test6_PO[,4]))
-which(cov2>0) # 0% cover
+length(which(cov2>0))/length(cov2) # 100% cover
 
-cov3 <- abs(test6_PO[,6]-test6_PO[,5]) - max(abs(test6_Y [,3]-test6_PO[,5]),
+cov3 <- abs(test6_PO[,6]-test6_PO[,5]) - pmax(abs(test6_Y [,3]-test6_PO[,5]),
                                             abs(test6_Y [,3]-test6_PO[,6]))
-which(cov3>0) # 0% cover
+length(which(cov3>0))/length(cov3) # 83% cover
 
-cov4 <- abs(test6_PO[,8]-test6_PO[,7]) - max(abs(test6_Y [,4]-test6_PO[,7]),
+cov4 <- abs(test6_PO[,8]-test6_PO[,7]) - pmax(abs(test6_Y [,4]-test6_PO[,7]),
                                             abs(test6_Y [,4]-test6_PO[,8]))
-which(cov4>0) # 10% cover
+length(which(cov4>0))/length(cov4) # 97% cover
 
+
+```
+
+## test spatial PO (with interference) coverage, with ps known exactly 
+This is not a realistic scenario, because normally only Z is observed and G can only be inferred and therefore ps_g always a lousy estimation.
+Never the less, providing the exact ps_z and ps_g helps diagnose whether model performance is critically hinging on a good estimate of ps_g.
+
+```{r, eval=FALSE}
+# test weighted split conformal under interference with known ps and known G
+# use dataset nt1_b / nt1_c
+# true ps in ps_nt_1sum, true G in G_nt_1
+
+null_ps<-data.frame(rep(1,n),rep(1,n),rep(1,n),rep(1,n))
+
+test62_res<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
+                              testid=testid6,
+                              tr=Z_nt_1,
+                              A=A,Atype="adj",
+                              ps_pred_model="multinom",
+                              ps=ps_nt_1sum, G=G_nt_1,
+                              outfun="QRF", CQR=TRUE,
+                              retrainYmodel=TRUE)
+test62_PO <- test62_res[[1]]
+# test62_PO <- test62_PO_nullwt # using ps not better than using null weights
+
+# check prediction against 'true' (as in one realisation of) PO
+# test6_tl<-T_nt_3[testid6] 
+T_nt_1[testid6] 
+
+test6_Y <- data.frame(Y11=Y11_nt_1[testid6],
+                      Y10=Y10_nt_1[testid6],
+                      Y01=Y01_nt_1[testid6],
+                      Y00=Y00_nt_1[testid6])
+
+# coverage given exact G and ps 
+cov1 <- abs(test62_PO[,2]-test62_PO[,1]) - pmax(abs(test6_Y [,1]-test62_PO[,1]),
+                                            abs(test6_Y [,1]-test62_PO[,2]))
+length(which(cov1>0))/length(cov1) # 67% cover
+
+cov2 <- abs(test62_PO[,4]-test62_PO[,3]) - pmax(abs(test6_Y [,2]-test62_PO[,3]),
+                                            abs(test6_Y [,2]-test62_PO[,4]))
+length(which(cov2>0))/length(cov2) # 63% cover
+
+cov3 <- abs(test62_PO[,6]-test62_PO[,5]) - pmax(abs(test6_Y [,3]-test62_PO[,5]),
+                                            abs(test6_Y [,3]-test62_PO[,6]))
+length(which(cov3>0))/length(cov3) # 67% cover
+
+cov4 <- abs(test62_PO[,8]-test62_PO[,7]) - pmax(abs(test6_Y [,4]-test62_PO[,7]),
+                                            abs(test6_Y [,4]-test62_PO[,8]))
+length(which(cov4>0))/length(cov4) # 73% cover
 
 ```
 
 
 
 
+```{r}
+# test Ymodel predictions
+# use X_nt_1 Xnei to predict Y
 
-```{r plot1 }
+X11<-X_nt_1[which(T_nt_1=="t11"),,drop=FALSE]
+Xnei11<- get_Xnei(X_nt_1,A,"adj")
+Xnei11<-Xnei11[which(T_nt_1=="t11"),,drop=FALSE]
+X11<-cbind.data.frame(X11,Xnei11)
+Y11<-Y_nt_1[which(T_nt_1=="t11")]
+length(Y11) # 1295
+fit11<-grf::quantile_forest(X = X11[1:1200,], Y = Y11[1:1200],quantiles = c(0.05,0.95))
+Y11_hat <- predict(fit11, X11[1200:1295,],quantiles = c(0.05,0.95))
+Y11_hat <- Y11_hat$predictions
+Y11test <- Y11[1200:1295]
+cov <- abs(Y11_hat[,2]-Y11_hat[,1]) - pmax(abs(Y11test-Y11_hat[,1]),
+                                            abs(Y11test-Y11_hat[,2]))
+length(which(cov>0))/length(cov)
+# 96.9%
+# Ymodel is not great !!!
+cbind.data.frame(Y11test,Y11_hat)
+cov
+```
+
+
+```{r plot1 , eval=FALSE}
 # plotting coverage of test6
 
 

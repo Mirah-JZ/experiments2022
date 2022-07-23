@@ -383,6 +383,7 @@ genY_nt_3 <- function(X){
   2 / (1 + exp(coeff$coeff1*(X[, 1]-0.5)))*2/(1 + exp(-1 *(X[, 2] - 0.5)))+rnorm(n)
 }
 YZ1_nt_3 <- genY_nt_3(X_ns_2) 
+# length(YZ1_nt_3)
 # hist(Y1_nt_3)
 # plot(X_ns_2[,1],Y1_nt_3)
 YZ_nt_3 <- ifelse(T_ns_2 == 1, YZ1_nt_3, Y0_ns_2)
@@ -413,7 +414,7 @@ X_nt_3<-X_ns_2
 Z_nt_3<-g3$Z
 G_nt_3<-ifelse(g3$G >0.5, 1, 0)
 T_nt_3<-paste0("t",Z_nt_3,G_nt_3)
-save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3.Rdata")
+save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3_5k.Rdata")
 ```
 
 ```{r net3_plots, eval=FALSE}
@@ -775,7 +776,7 @@ test7 (spatial heteroskadestic)
 test8 (spatial heteroskadestic non-stationary).
 
 
-```{r compute_coverage, eval=FALSE}
+```{r test6, eval=FALSE}
 
 # test6
 
@@ -836,7 +837,7 @@ length(which(cov4>0))/length(cov4) # 97% cover
 This is not a realistic scenario, because normally only Z is observed and G can only be inferred and therefore ps_g always a lousy estimation.
 Never the less, providing the exact ps_z and ps_g helps diagnose whether model performance is critically hinging on a good estimate of ps_g.
 
-```{r, eval=FALSE}
+```{r test62, eval=FALSE}
 # test weighted split conformal under interference with known ps and known G
 # use dataset nt1_b / nt1_c
 # true ps in ps_nt_1sum, true G in G_nt_1
@@ -884,7 +885,6 @@ length(which(cov4>0))/length(cov4) # 73% cover
 
 
 
-
 ```{r}
 # test Ymodel predictions
 # use X_nt_1 Xnei to predict Y
@@ -909,9 +909,80 @@ cov
 ```
 
 
+
 ```{r plot1 , eval=FALSE}
 # plotting coverage of test6
 
+```
 
+
+```{r test7, eval=FALSE}
+# test7 
+# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
+# uses same testid6
+test7_res<-conformal_ITE1(X=X_nt_2, Y=Y_nt_2, 
+                              testid=testid6,
+                              tr=Z_nt_2,
+                              A=A,Atype="adj",
+                              ps_pred_model="multinom",
+                              ps=NA, G=NA,
+                              outfun="QRF", CQR=TRUE,
+                              retrainYmodel=TRUE)
+test7_PO <- test7_res[[1]]
+test7_Y <- data.frame(Y11=Y11_nt_2[testid6],
+                      Y10=Y10_nt_2[testid6],
+                      Y01=Y01_nt_2[testid6],
+                      Y00=Y00_nt_2[testid6])
+# coverage with estimated G and ps
+cov1 <- abs(test7_PO[,2]-test7_PO[,1]) - pmax(abs(test7_Y [,1]-test7_PO[,1]),
+                                            abs(test7_Y [,1]-test7_PO[,2]))
+length(which(cov1>0))/length(cov1) # 97% cover
+
+cov2 <- abs(test7_PO[,4]-test7_PO[,3]) - pmax(abs(test7_Y [,2]-test7_PO[,3]),
+                                            abs(test7_Y [,2]-test7_PO[,4]))
+length(which(cov2>0))/length(cov2) # 97% cover
+
+cov3 <- abs(test7_PO[,6]-test7_PO[,5]) - pmax(abs(test7_Y [,3]-test7_PO[,5]),
+                                            abs(test7_Y [,3]-test7_PO[,6]))
+length(which(cov3>0))/length(cov3) # 93% cover
+
+cov4 <- abs(test7_PO[,8]-test7_PO[,7]) - pmax(abs(test7_Y [,4]-test7_PO[,7]),
+                                            abs(test7_Y [,4]-test7_PO[,8]))
+length(which(cov4>0))/length(cov4) # 97% cover
+```
+
+```{r test8, eval=FALSE}
+# test7 
+# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
+# uses same testid6
+test8_res<-conformal_ITE1(X=X_nt_3, Y=Y_nt_3, 
+                              testid=testid6,
+                              tr=Z_nt_3,
+                              A=A,Atype="adj",
+                              ps_pred_model="multinom",
+                              ps=NA, G=NA,
+                              outfun="QRF", CQR=TRUE,
+                              retrainYmodel=TRUE)
+test8_PO <- test8_res[[1]]
+test8_Y <- data.frame(Y11=Y11_nt_3[testid6],
+                      Y10=Y10_nt_3[testid6],
+                      Y01=Y01_nt_3[testid6],
+                      Y00=Y00_nt_3[testid6])
+# coverage with estimated G and ps
+cov1 <- abs(test8_PO[,2]-test8_PO[,1]) - pmax(abs(test8_Y [,1]-test8_PO[,1]),
+                                            abs(test8_Y [,1]-test8_PO[,2]))
+length(which(cov1>0))/length(cov1) # 87% cover
+
+cov2 <- abs(test8_PO[,4]-test8_PO[,3]) - pmax(abs(test8_Y [,2]-test8_PO[,3]),
+                                            abs(test8_Y [,2]-test8_PO[,4]))
+length(which(cov2>0))/length(cov2) # 80% cover
+
+cov3 <- abs(test8_PO[,6]-test8_PO[,5]) - pmax(abs(test8_Y [,3]-test8_PO[,5]),
+                                            abs(test8_Y [,3]-test8_PO[,6]))
+length(which(cov3>0))/length(cov3) # 97% cover
+
+cov4 <- abs(test8_PO[,8]-test8_PO[,7]) - pmax(abs(test8_Y [,4]-test8_PO[,7]),
+                                            abs(test8_Y [,4]-test8_PO[,8]))
+length(which(cov4>0))/length(cov4) # 97% cover
 ```
 

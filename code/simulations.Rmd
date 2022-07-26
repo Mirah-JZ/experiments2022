@@ -604,7 +604,7 @@ test9 (_nt_5 unmeasured spatial confounding)
 
 test10 (_nt_3 spatial non-stationary and local estimates).
 
-```{r test_Ymodel}
+```{r test_Ymodel, eval=FALSE}
 # test Ymodel predictions
 # use X_nt_1 Xnei to predict Y
 
@@ -625,267 +625,165 @@ length(which(cov>0))/length(cov)
 
 ```
 
-```{r test6, eval=FALSE}
-# test6
-# # input X_nt_1, Y_nt_1, Z_nt_1, Y11_nt_1, Y10_nt_1, Y01_nt_1, Y00_nt_1
-# either the Ymodel is only fitted once and a list of testid are fed to the model, 
-# or the Ymodel is fitted again each time a new test point is supplied.
-# TO do: ! atm use retrainYmodel=TRUE, so that the order of outputs will not be scrambled.
-
-testid6 <- sample(5000,30) # n=30, run time: QRF 14/ 90s , QBART 110s
-  
-test6_res<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
-                              testid=testid6,
-                              tr=Z_nt_1,
-                              A=A,Atype="adj",
-                              ps_pred_model="multinom",
-                              ps=NA, G=NA,
-                              outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test6_PO <- test6_res[[1]]
-# check prediction against 'true' (as in one realisation of) PO
-# test6_tl<-T_nt_3[testid6] 
-T_nt_1[testid6] 
-Y_nt_1[testid6[26]]
-T_nt_1[testid6[26]] 
-# for test point 26 true T=t11, estimated That=t10, 
-# to boost coverage, Y_That should also be predicted instead of just using Yobs
-
-test6_Y <- data.frame(Y11=Y11_nt_1[testid6],
-                      Y10=Y10_nt_1[testid6],
-                      Y01=Y01_nt_1[testid6],
-                      Y00=Y00_nt_1[testid6])
-# coverage with estimated G and ps
-cov1 <- abs(test6_PO[,2]-test6_PO[,1]) - pmax(abs(test6_Y [,1]-test6_PO[,1]),
-                                            abs(test6_Y [,1]-test6_PO[,2]))
-length(which(cov1>0))/length(cov1) # 83% cover
-
-cov2 <- abs(test6_PO[,4]-test6_PO[,3]) - pmax(abs(test6_Y [,2]-test6_PO[,3]),
-                                            abs(test6_Y [,2]-test6_PO[,4]))
-length(which(cov2>0))/length(cov2) # 100% cover
-
-cov3 <- abs(test6_PO[,6]-test6_PO[,5]) - pmax(abs(test6_Y [,3]-test6_PO[,5]),
-                                            abs(test6_Y [,3]-test6_PO[,6]))
-length(which(cov3>0))/length(cov3) # 83% cover
-
-cov4 <- abs(test6_PO[,8]-test6_PO[,7]) - pmax(abs(test6_Y [,4]-test6_PO[,7]),
-                                            abs(test6_Y [,4]-test6_PO[,8]))
-length(which(cov4>0))/length(cov4) # 97% cover
-```
 
 Alternative test6 spatial PO (with interference) coverage, with ps known exactly 
 This is not a realistic scenario, because normally only Z is observed and G can only be inferred and therefore ps_g always a lousy estimation.
 Never the less, providing the exact ps_z and ps_g helps diagnose whether model performance is critically hinging on a good estimate of ps_g.
 COverage is actually 0.7 and smaller than test6. why?
 
-```{r test62, eval=FALSE}
-# test 6
+
+## summary of coverage
+```{r cal_coverage, eval=FALSE}
+# repeated experiments to calculate coverage
+# PO_true is a dataframe of true POs Y11, Y10, Y01, Y00
+# return PO coverage rates and lengths of ITE prediction intervals
+cal_coverage <- function(X,Y,testid,tr,A,Atype,
+                         ps_pred_model,ps,G,
+                         outfun,CQR,retrainYmodel,
+                         iter=30,PO_true){
+
+  cov1<-cov2<-cov3<-cov4<-len1<-len2<-len3<-len4<-c()
+  
+  for (i in 1:iter){
+    temp <- conformal_ITE1(X=X, Y=Y, testid=testid,tr=tr,
+                              A=A,Atype=Atype,
+                              ps_pred_model=ps_pred_model,
+                              ps=ps, G=G,outfun=outfun, CQR=CQR,
+                              retrainYmodel=retrainYmodel)
+    c1 <- abs(temp[[1]][,2]-temp[[1]][,1]) - pmax(abs(PO_true[,1]-temp[[1]][,1]),
+                                            abs(PO_true[,1]-temp[[1]][,2]))
+    c2 <- abs(temp[[1]][,4]-temp[[1]][,3]) - pmax(abs(PO_true[,2]-temp[[1]][,3]),
+                                            abs(PO_true[,2]-temp[[1]][,4]))
+    c3 <- abs(temp[[1]][,6]-temp[[1]][,5]) - pmax(abs(PO_true[,3]-temp[[1]][,5]),
+                                            abs(PO_true[,3]-temp[[1]][,6]))
+    c4 <- abs(temp[[1]][,8]-temp[[1]][,7]) - pmax(abs(PO_true[,4]-temp[[1]][,7]),
+                                            abs(PO_true[,4]-temp[[1]][,8]))
+    cov1[i] <-length(which(c1>0))/length(c1)
+    cov2[i] <-length(which(c2>0))/length(c2)
+    cov3[i] <-length(which(c3>0))/length(c3)
+    cov4[i] <-length(which(c4>0))/length(c4)
+    len1[i] <-mean(temp[[2]][,2]-temp[[2]][,1])
+    len2[i] <-mean(temp[[2]][,4]-temp[[2]][,3])
+    len3[i] <-mean(temp[[2]][,6]-temp[[2]][,5])
+    len4[i] <-mean(temp[[2]][,8]-temp[[2]][,7])
+  }
+  cov<-data.frame(cov11=cov1,cov10=cov2,cov01=cov3,cov00=cov4,
+                 len11=len1,len10=len2,len01=len3,len00=len4)
+  return(cov)
+}
+```
+
+
+```{r test6_cov}
+
+testid6 <- sample(5000,50) # n=30, run time: QRF 14/ 90s , QBART 110s
+# test6
+# # input X_nt_1, Y_nt_1, Z_nt_1, Y11_nt_1, Y10_nt_1, Y01_nt_1, Y00_nt_1
+# either the Ymodel is only fitted once and a list of testid are fed to the model, 
+# or the Ymodel is fitted again each time a new test point is supplied.
+# TO do: ! atm use retrainYmodel=TRUE, so that the order of outputs will not be scrambled.
+# test 62
 # input X_nt_1, Y_nt_1, Z_nt_1, Y11_nt_1, Y10_nt_1, Y01_nt_1, Y00_nt_1, ps_nt_1sum
 # weighted split conformal under interference with known ps and known G
 # use dataset nt1_b / nt1_c which regenerates X Y Z
-# true ps in ps_nt_1sum, true G in G_nt_1
-
-null_ps<-data.frame(rep(1,n),rep(1,n),rep(1,n),rep(1,n))
-
-test62_res<-conformal_ITE1(X=X_nt_1, Y=Y_nt_1, 
-                              testid=testid6,
-                              tr=Z_nt_1,
-                              A=A,Atype="adj",
-                              ps_pred_model="multinom",
-                              ps=ps_nt_1sum, G=G_nt_1,
-                              outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test62_PO <- test62_res[[1]]
-# test62_PO <- test62_PO_nullwt # using ps not better than using null weights
-
-# check prediction against 'true' (as in one realisation of) PO
-# test6_tl<-T_nt_3[testid6] 
-T_nt_1[testid6] 
-
+# optional: true ps in ps_nt_1sum, true G in G_nt_1
 test6_Y <- data.frame(Y11=Y11_nt_1[testid6],
                       Y10=Y10_nt_1[testid6],
                       Y01=Y01_nt_1[testid6],
                       Y00=Y00_nt_1[testid6])
-
-# coverage given exact G and ps 
-cov1 <- abs(test62_PO[,2]-test62_PO[,1]) - pmax(abs(test6_Y [,1]-test62_PO[,1]),
-                                            abs(test6_Y [,1]-test62_PO[,2]))
-length(which(cov1>0))/length(cov1) # 67% cover
-
-cov2 <- abs(test62_PO[,4]-test62_PO[,3]) - pmax(abs(test6_Y [,2]-test62_PO[,3]),
-                                            abs(test6_Y [,2]-test62_PO[,4]))
-length(which(cov2>0))/length(cov2) # 63% cover
-
-cov3 <- abs(test62_PO[,6]-test62_PO[,5]) - pmax(abs(test6_Y [,3]-test62_PO[,5]),
-                                            abs(test6_Y [,3]-test62_PO[,6]))
-length(which(cov3>0))/length(cov3) # 67% cover
-
-cov4 <- abs(test62_PO[,8]-test62_PO[,7]) - pmax(abs(test6_Y [,4]-test62_PO[,7]),
-                                            abs(test6_Y [,4]-test62_PO[,8]))
-length(which(cov4>0))/length(cov4) # 73% cover
-
-```
-
-
-```{r plot_test6 , eval=FALSE}
-# plotting coverage of test6
-
-```
-
-
-```{r test7, eval=FALSE}
-# test7 
-# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
-# uses same testid6
-test7_res<-conformal_ITE1(X=X_nt_2, Y=Y_nt_2, 
+test6_cov <- cal_coverage(X=X_nt_1, Y=Y_nt_1, 
                               testid=testid6,
-                              tr=Z_nt_2,
+                              tr=Z_nt_1,
                               A=A,Atype="adj",
                               ps_pred_model="multinom",
                               ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test7_PO <- test7_res[[1]]
+                              retrainYmodel=TRUE,
+                         iter=30,PO_true=test6_Y)
+
+# test7 
+# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
+# uses same testid6
 test7_Y <- data.frame(Y11=Y11_nt_2[testid6],
                       Y10=Y10_nt_2[testid6],
                       Y01=Y01_nt_2[testid6],
                       Y00=Y00_nt_2[testid6])
-# coverage with estimated G and ps
-cov1 <- abs(test7_PO[,2]-test7_PO[,1]) - pmax(abs(test7_Y [,1]-test7_PO[,1]),
-                                            abs(test7_Y [,1]-test7_PO[,2]))
-length(which(cov1>0))/length(cov1) # 97% cover
-
-cov2 <- abs(test7_PO[,4]-test7_PO[,3]) - pmax(abs(test7_Y [,2]-test7_PO[,3]),
-                                            abs(test7_Y [,2]-test7_PO[,4]))
-length(which(cov2>0))/length(cov2) # 97% cover
-
-cov3 <- abs(test7_PO[,6]-test7_PO[,5]) - pmax(abs(test7_Y [,3]-test7_PO[,5]),
-                                            abs(test7_Y [,3]-test7_PO[,6]))
-length(which(cov3>0))/length(cov3) # 93% cover
-
-cov4 <- abs(test7_PO[,8]-test7_PO[,7]) - pmax(abs(test7_Y [,4]-test7_PO[,7]),
-                                            abs(test7_Y [,4]-test7_PO[,8]))
-length(which(cov4>0))/length(cov4) # 97% cover
-```
-
-```{r test8, eval=FALSE}
-# test8 
-# input X_nt_4, Y_nt_4, Z_nt_4, Y11_nt_4, Y10_nt_4, Y01_nt_4, Y00_nt_4
-test8_res<-conformal_ITE1(X=X_nt_4, Y=Y_nt_4, 
+test7_cov <- cal_coverage(X=X_nt_1, Y=Y_nt_1, 
                               testid=testid6,
-                              tr=Z_nt_4,
+                              tr=Z_nt_1,
                               A=A,Atype="adj",
                               ps_pred_model="multinom",
                               ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test8_PO <- test8_res[[1]]
+                              retrainYmodel=TRUE,
+                         iter=30,PO_true=test7_Y)
+
+# test8 
+# input X_nt_4, Y_nt_4, Z_nt_4, Y11_nt_4, Y10_nt_4, Y01_nt_4, Y00_nt_4
 test8_Y <- data.frame(Y11=Y11_nt_4[testid6],
                       Y10=Y10_nt_4[testid6],
                       Y01=Y01_nt_4[testid6],
                       Y00=Y00_nt_4[testid6])
-# coverage with estimated G and ps
-cov1 <- abs(test8_PO[,2]-test8_PO[,1]) - pmax(abs(test8_Y [,1]-test8_PO[,1]),
-                                            abs(test8_Y [,1]-test8_PO[,2]))
-length(which(cov1>0))/length(cov1) # 90% cover
-
-cov2 <- abs(test8_PO[,4]-test8_PO[,3]) - pmax(abs(test8_Y [,2]-test8_PO[,3]),
-                                            abs(test8_Y [,2]-test8_PO[,4]))
-length(which(cov2>0))/length(cov2) # 93% cover
-
-cov3 <- abs(test8_PO[,6]-test8_PO[,5]) - pmax(abs(test8_Y [,3]-test8_PO[,5]),
-                                            abs(test8_Y [,3]-test8_PO[,6]))
-length(which(cov3>0))/length(cov3) # 87% cover
-
-cov4 <- abs(test8_PO[,8]-test8_PO[,7]) - pmax(abs(test8_Y [,4]-test8_PO[,7]),
-                                            abs(test8_Y [,4]-test8_PO[,8]))
-length(which(cov4>0))/length(cov4) # 93% cover
-```
-
-
-```{r test9, eval=FALSE}
-# test9 
-# input X_nt_5=X_nt_4[,2:5], Y_nt_4, Z_nt_4, Y11_nt_4, Y10_nt_4, Y01_nt_4, Y00_nt_4
-X_nt_5<-X_nt_4[,2:5]
-test9_res<-conformal_ITE1(X=X_nt_5, Y=Y_nt_4, 
+test8_cov <- cal_coverage(X=X_nt_4, Y=Y_nt_4, 
                               testid=testid6,
                               tr=Z_nt_4,
                               A=A,Atype="adj",
                               ps_pred_model="multinom",
                               ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test9_PO <- test9_res[[1]]
-# test9_Y is same as test8_Y
-# coverage with estimated G and ps
-cov1 <- abs(test9_PO[,2]-test9_PO[,1]) - pmax(abs(test8_Y [,1]-test9_PO[,1]),
-                                            abs(test8_Y [,1]-test9_PO[,2]))
-length(which(cov1>0))/length(cov1) # 90% cover
-
-cov2 <- abs(test9_PO[,4]-test9_PO[,3]) - pmax(abs(test8_Y [,2]-test9_PO[,3]),
-                                            abs(test8_Y [,2]-test9_PO[,4]))
-length(which(cov2>0))/length(cov2) # 93% cover
-
-cov3 <- abs(test9_PO[,6]-test9_PO[,5]) - pmax(abs(test8_Y [,3]-test9_PO[,5]),
-                                            abs(test8_Y [,3]-test9_PO[,6]))
-length(which(cov3>0))/length(cov3) # 83% cover
-
-cov4 <- abs(test9_PO[,8]-test9_PO[,7]) - pmax(abs(test8_Y [,4]-test9_PO[,7]),
-                                            abs(test8_Y [,4]-test9_PO[,8]))
-length(which(cov4>0))/length(cov4) # 90% cover
-```
-
-
-```{r test10_global, eval=FALSE}
-# test10 global. use conformal_ITE1()
-# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
-# uses same testid6
-test10_res<-conformal_ITE1(X=X_nt_3, Y=Y_nt_3, 
+                              retrainYmodel=TRUE,
+                         iter=30,PO_true=test7_Y)
+# test9 
+# input X_nt_5=X_nt_4[,2:5], Y_nt_4, Z_nt_4, Y11_nt_4, Y10_nt_4, Y01_nt_4, Y00_nt_4
+test9_Y <- test8_Y
+X_nt_5<-X_nt_4[,2:5]
+test9_cov <- cal_coverage(X=X_nt_5, Y=Y_nt_4, 
                               testid=testid6,
-                              tr=Z_nt_3,
+                              tr=Z_nt_4,
                               A=A,Atype="adj",
                               ps_pred_model="multinom",
                               ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test10_PO <- test10_res[[1]]
+                              retrainYmodel=TRUE,
+                         iter=30,PO_true=test7_Y)
+
+# test10 global. use conformal_ITE1()
+# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
+# uses same testid6
 test10_Y <- data.frame(Y11=Y11_nt_3[testid6],
                       Y10=Y10_nt_3[testid6],
                       Y01=Y01_nt_3[testid6],
                       Y00=Y00_nt_3[testid6])
-# coverage with estimated G and ps
-cov1 <- abs(test10_PO[,2]-test10_PO[,1]) - pmax(abs(test10_Y [,1]-test10_PO[,1]),
-                                            abs(test10_Y [,1]-test10_PO[,2]))
-length(which(cov1>0))/length(cov1) # 87% cover
-
-cov2 <- abs(test10_PO[,4]-test10_PO[,3]) - pmax(abs(test10_Y [,2]-test10_PO[,3]),
-                                            abs(test10_Y [,2]-test10_PO[,4]))
-length(which(cov2>0))/length(cov2) # 80% cover
-
-cov3 <- abs(test10_PO[,6]-test10_PO[,5]) - pmax(abs(test10_Y [,3]-test10_PO[,5]),
-                                            abs(test10_Y [,3]-test10_PO[,6]))
-length(which(cov3>0))/length(cov3) # 97% cover
-
-cov4 <- abs(test10_PO[,8]-test10_PO[,7]) - pmax(abs(test10_Y [,4]-test10_PO[,7]),
-                                            abs(test10_Y [,4]-test10_PO[,8]))
-length(which(cov4>0))/length(cov4) # 97% cover
-```
-
-
-```{r test10_local, eval=FALSE}
-# test10 local. uses conformal_ITE2()
-# input X_nt_2, Y_nt_2, Z_nt_2, Y11_nt_2, Y10_nt_2, Y01_nt_2, Y00_nt_2
-# uses same testid6
-
-test10_res<-conformal_ITE2(X=X_nt_3, Y=Y_nt_3, 
+test10_global_cov <- cal_coverage(X=X_nt_3, Y=Y_nt_3, 
                               testid=testid6,
                               tr=Z_nt_3,
                               A=A,Atype="adj",
                               ps_pred_model="multinom",
                               ps=NA, G=NA,
                               outfun="QRF", CQR=TRUE,
-                              retrainYmodel=TRUE)
-test10_PO <- test10_res[[1]]
+                              retrainYmodel=TRUE,
+                         iter=30,PO_true=test7_Y)
+test10_local_cov
+```
 
+```{r plot_coverage}
+cov=rnorm(600,90)
+Tr0=rep(c("11","10","01","00"),each=30)
+Tr=c(Tr0,Tr0,Tr0,Tr0,Tr0)
+test=rep(c("test6","test7","test8","test9","test10"),each=120)
+testplot<-data.frame(cov,Tr,test)
+
+par(mar=c(3,4,3,1))
+boxplot(cov~Tr*test,data=testplot,boxwex=0.4,ylab="coverage %",
+        main="Coverage of potential outcomes",
+        col=c("slateblue1","lightblue","pink","tomato"),
+        xaxt="n")
+axis(1,at=seq(2.5,22,4),labels=c("test6","test7","test8","test9","test10"),tick=FALSE,cex=0.3)
+for(i in seq(0.5 , 20 , 4)){ 
+  abline(v=i,lty=1, col="grey")
+}
+legend("bottomright", legend = c("t11","t10","t01","t00"), 
+       col=c("slateblue1","lightblue","pink","tomato"),
+       pch = 15, bty = "n", pt.cex = 2, cex = 1,  horiz = T, inset = c(0, 0))
 ```
 

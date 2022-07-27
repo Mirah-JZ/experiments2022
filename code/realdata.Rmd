@@ -1,24 +1,388 @@
 ---
-title: "casestudies"
+title: "realdata"
 author: "mira"
-date: "2022/6/15"
+date: "25/07/2022"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r}
+library(dplyr)
+library(corrplot)
+library(corrgram)
+library(readxl)
+library(readr)
+library(tidyverse)
+library(viridis)
+library(RColorBrewer)
+library(data.table)
+library(ggplot2)
+library(cdlTools)
+library(stargazer)
+library(sf)
+library(spdep)
+library(tmap)
+library(lmtest)
+library(igraph)
+library(grf)
+library(gbm)
+library(randomForest)
+library(bartMachine)
+library(xgboost)
+library(nnet)
+library(blockCV)
+#library(RTransferEntropy)
+#library(Rlibeemd)
 ```
 
-# Demonstration on real data
+```{r}
+source("gps_weightedconformal.R")
+```
 
-## Chicago crime rates
+## define treatment and effect
+1. Treatment can be defined as a sharp turning point in oil price. 
+This can be clearly pinpointed in time. the change in average HPI growth rates soon before and after the turning point can be compared. GRD/DID can also potentially be applied, neither of which are designed to handle spillovers. 
 
-```{r , eval=FALSE}
+A few turning points: 
+2008 07 high point, boom to bust. financial crisis. For this point, HPI bust leads oil price bust. Hard to interpret without historical context.
+2008 12 low point, bust to boom. Seems to parallel small HPI recovery ?
+2014 06 high point, stall to crash. Seems to correspond to HPI stall. -----
+2020 04 low point, crash to boom. first wave of pandemic.Corresponds to HPI up trend. What's the role of pandemic here? -----
+
+2. Treatment can be defined as a stable period of oil price appreciation/ deflation.
+Average HPI growth rates during the period can be compared across locations. The price appreciation expectation formed during the boom would be the driver of HPI growth.
+A few periods of stable oil price trends:
+2004-2008/07 before financial crisis. ? regression result was OK from stats essay.
+2008/12 - 2011/04
+2020/04-2021/12 ? regression result opposite to expectation.
+2014/06-2016/01 crash
+
+## import data
+```{r import_data, eval=FALSE}
+# local authorities HPI 01/2004-01/2022 (on average and by house type)
+HPI_series <- read_csv("HPI_series.csv")
+areas <- unique(HPI_series$AreaCode) # 421 local authorities
+# Brent historical spot oil price (dollar per barrel) 2004-2022
+brent_series <- read_excel("brent_series.xlsx") # 217 obs
+# SP 500 historical price 2004-2019
+#SP<-read_csv("SP500.csv")
+# UKFTSE100 historical price 2004-2019
+#UKFT<-read_csv("UKFTSE100.csv")
+```
+
+```{r format_HPI, eval=FALSE}
+HPI_series<-HPI_series[,c(1,4,5,7,8,9)] # date, area, areacode, index, 1m%, 12m%
+HPI_series2<-HPI_series[,c(1,3,5)] # date, areacode, 1m%,
+HPI_series2.w <- HPI_series2 %>% pivot_wider(names_from=Date,values_from = `1m%Change`)
+HPI_series2.w <-HPI_series2.w [,1:218]
+
+# monthly growth rates averaged. affected by different smoothness of the trends
+# average monthly growth during 2004-2008/07
+HPI_series2.w$grow1 <- rowMeans(HPI_series2.w[,17:56])
+# average monthly growth during 2008/12 - 2011/04
+HPI_series2.w$grow2 <- rowMeans(HPI_series2.w[,61:89])
+# average monthly growth during 2014/06-2016/01
+HPI_series2.w$grow3 <- rowMeans(HPI_series2.w[,127:146])
+# average monthly growth during 2020/04-2021/12
+HPI_series2.w$grow4 <- rowMeans(HPI_series2.w[,197:217])
+
+# average monthly growth prior 2008 07
+HPI_series2.w$prior1 <- rowMeans(HPI_series2.w[,45:56])
+# average monthly growth post 2008 07
+HPI_series2.w$post1 <- rowMeans(HPI_series2.w[,56:61])
+# average monthly growth prior 2008 12
+HPI_series2.w$prior2 <- rowMeans(HPI_series2.w[,56:61])
+# average monthly growth post 2008 12
+HPI_series2.w$post2 <- rowMeans(HPI_series2.w[,61:72])
+# average monthly growth prior 2014 06
+HPI_series2.w$prior3 <- rowMeans(HPI_series2.w[,116:127])
+# average monthly growth post 2014 06
+HPI_series2.w$post3 <- rowMeans(HPI_series2.w[,127:138])
+# average monthly growth prior 2020 04
+HPI_series2.w$prior4 <- rowMeans(HPI_series2.w[,186:197])
+# average monthly growth post 2020 04
+HPI_series2.w$post4 <- rowMeans(HPI_series2.w[,197:208])
+
+HPI_series2.w <- HPI_series2.w[,c(1,219:230)]
+# maybe calculate average growth rate differently? from start and end HPI
+
+HPI_series2.w$cut1<-HPI_series2.w$post1-HPI_series2.w$prior1
+HPI_series2.w$cut2<-HPI_series2.w$post2-HPI_series2.w$prior2
+HPI_series2.w$cut3<-HPI_series2.w$post3-HPI_series2.w$prior3
+HPI_series2.w$cut4<-HPI_series2.w$post4-HPI_series2.w$prior4
+
+par(mfrow=c(3,3))
+hist(HPI_series2.w $grow1) 
+hist(HPI_series2.w $grow2) 
+hist(HPI_series2.w $grow3)
+hist(HPI_series2.w $grow4)
+hist(HPI_series2.w $cut1) 
+hist(HPI_series2.w $cut2)
+hist(HPI_series2.w $cut3)
+hist(HPI_series2.w $cut4)
+```
+
+
+```{r HPI_map, eval=FALSE}
+# map the house price growth across LAs
+map <- st_read('Local_Authority_Districts_(December_2019)_Boundaries_UK_BUC.shp')
+#class(map) # sf
+#head(map) # LA ID in lad19cd, 382 obs
+map <- left_join(map,HPI_series2.w,by=c("lad19cd"="AreaCode"))
+
+plot1<-function(map,c){
+  tm_shape(map)+
+  tm_fill(col=c(c),palette="-RdBu",style = "quantile", n = 9,midpoint=0)+
+  tm_borders(col='black',lwd=0.1)+
+  tm_scale_bar()+
+  tm_layout(legend.outside = TRUE)
+}
+
+plot1(map, c("grow1","grow2"))
+plot1(map,c("grow3","grow4"))
+plot1(map,c("cut1","cut2"))
+plot1(map,c("cut3","cut4"))
 
 ```
 
-## UK house prices
 
-```{r , eval=FALSE}
+```{r oil_loc, eval=FALSE}
+# add measurements of oil industry concentration, based on ONS labour statistics
+oil_prod <- c("E09000001","E09000033","E07000085","E10000030","S12000034","E07000209")
+oilgas_prod <- c("E09000001","E09000033","E07000085","E10000030","S12000034","E07000209","E08000022","E07000127","E07000147","E07000146","E06000011","E08000021")
+
+map$oilgas_prod <- ifelse(map$lad19cd%in%oilgas_prod,1,0) 
+HPI_series2.w$oilgas_prod<- ifelse(HPI_series2.w$AreaCode%in%oilgas_prod,1,0) 
+
+# check group means
+mean(HPI_series2.w$grow1[which(HPI_series2.w$oilgas_prod==1)])
+mean(HPI_series2.w$grow1[which(HPI_series2.w$oilgas_prod==0)])
+
+boxplot(HPI_series2.w$grow1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$grow1[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$grow2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$grow2[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$grow3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$grow3[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$grow4[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$grow4[which(HPI_series2.w$oilgas_prod==0)],
+        main="Growth across periods")
+boxplot(HPI_series2.w$cut1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut1[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$cut2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut2[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$cut4[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut4[which(HPI_series2.w$oilgas_prod==0)],
+        main="Growth across turning points")
+# the oil price decline during 2014/06-2016/01 and the turning point leading to this period seem to affect oil prod locations more.
+# corresponding outcome vars: grow3 cut3
+
+# does it look different with outliers removed?
+```
+
+
+
+
+```{r dist2nearest_hub, eval=FALSE}
+# calculate each LA's distance to nearest oil_gas production hubs
+# get ID of oil_gas hubs and select columns in distance matrix with such ID
+ID <- which(centroids$lad19cd%in%oilgas_prod)
+dist <- as.data.frame(distance_matrix[,ID]) #382*10
+# get every LA's distance to the nearest hub
+min_dist<- NULL
+for (i in 1:382) {
+  min_dist[i] <- min(dist[i,])
+}
+min_dist<- as.data.frame(min_dist)
+min_dist$AreaCode<-centroids$lad19cd
+HPI_series2.w <- left_join(HPI_series2.w,min_dist)
+hist(log(HPI_series2.w$min_dist)) # looks fine
+```
+
+
+```{r merge_data1, eval=FALSE}
+# add control variables: demand and supply side proxies
+# demand: population growth and migration
+pop <- read_excel("ons_pop_projection2012.xls")
+pop <- filter(pop,COMPONENT=="All Migration Net") # or "Natural Change"
+HPI_series2.w <- left_join(HPI_series2.w,pop[,c(1,5)],by=c("AreaCode"="CODE"))
+# hist(log(HPI_series2.w$`2013.y`)) # net migration
+# hist(HPI_series2.w$`2013.x`) # population growth
+
+# supply side: new dwellings in 2006, 2010, 2020
+supply <- read_excel("Table_122.xlsx")
+HPI_series2.w <- left_join(HPI_series2.w,supply[,c(1,3:5)],by=c("AreaCode"="CODE"))
+HPI_series2.w$supply2 <- ifelse(HPI_series2.w$supply2>0,HPI_series2.w$supply2,0)
+HPI_series2.w$supply1 <- ifelse(HPI_series2.w$supply1>0,HPI_series2.w$supply1,0)
+
+hist(HPI_series2.w$supply3)
+hist(HPI_series2.w$supply2)
+hist(HPI_series2.w$supply1)
+hist(log(HPI_series2.w$supply1)) 
+hist(log(HPI_series2.w$supply2))
+hist(log(HPI_series2.w$supply3))
+
+map<-left_join(map,pop[,c(1,5)],by=c("lad19cd"="CODE"))
+map<-left_join(map,supply[,c(1,3:5)],by=c("lad19cd"="CODE"))
+```
+
+
+```{r merge_data2, eval=FALSE}
+# add more covariates
+```
+
+
+```{r A_matrix, eval=FALSE}
+# generate matrix after all covars are added to map and all NA rows are dropped.
+map2<-map[,-4]
+map2<-drop_na(map2) # 370 obs
+# create distance/adj matrix 
+centroids <- st_point_on_surface(x=map2)
+distance_matrix <- st_distance(centroids,centroids) # 382 * 382 with m as unit
+dist<-list()
+for (i in 1:370){dist[[i]]<-as.numeric(distance_matrix[,i])}
+dist<- do.call(cbind.data.frame,dist)
+colnames(dist)<-map2$lad19cd
+
+# set a distance threshold and create adj matrix
+A_adj<-list()
+for (i in 1:370){A_adj[[i]]<-ifelse(dist[,i]<50000,1,0)}
+A_adj<- do.call(cbind.data.frame,A_adj)
+colnames(A_adj)<-map2$lad19cd # A-adj is symmetric
+# A_adj<-t(A_adj)
+# hist(rowSums(A_adj))
+# quantile(rowSums(A_adj),0.8) # 0.05-3  0.8-36  
+
+# cap A_adj connections at 20 neighbors
+n20<-list()
+for (i in 1:370){
+  t<-as.numeric(dist[i,])
+  ord<- order(t)
+  thresh<-t[ord[21]]
+  n20[[i]]<-ifelse(t<thresh,1,0)
+}
+n20<- do.call(cbind.data.frame,n20)
+colnames(n20)<-map2$lad19cd
+n20<-t(n20)
+# rowSums(n25) # ==25  colSums != 25, near neigh matrix not symmetric
+A_adj2<-A_adj*n20
+
+# handle island LAs
+isl<-list()
+island<-which(rowSums(A_adj2)<4) 
+for (i in 1:length(island)){
+  idx<-island[i]
+  t<-as.numeric(dist[idx,])
+  ord<- order(t)
+  thresh<-t[ord[4]]
+  isl<-ifelse(t<thresh,1,0)
+  A_adj2[idx,]<-t(isl)
+}
+diag(A_adj2)<-0
+# hist(rowSums(A_adj2))
+
+# map the connections
+net<-graph_from_adjacency_matrix(as.matrix(A_adj2),mode="undirected")
+vertex_attr(net,"x")<-map2$long
+vertex_attr(net,"y")<-map2$lat
+plot(net,vertex.size = 2,vertex.label = NA,
+     axes=TRUE,margin=c(0,0,0,0),main="LA neighbour structure",xlim=c(-1,1))
 
 ```
+
+```{r}
+save(A_adj2,map2,HPI_series2.w,file="HPI_data.Rdata")
+```
+
+
+```{r regression, eval=FALSE}
+# cross-sectional regression for sanity checks
+# modeling liquidity shock by international oil price movement
+# HPI growth explained by oil_gas hubs, distance to oil_gas hubs, supply, demand
+
+m1 <- glm(log(grow1+1)~as.factor(oilgas_prod)+log(`2013.x`+10)+log(supply1+1),data=HPI_series2.w)
+m2 <- glm(grow22~as.factor(oilgas_prod)+log(`2013.x`+10)+log(supply2+1),data=HPI_series2.w)
+m3 <- glm(grow3~as.factor(oilgas_prod)+log(`2013.x`+10)+log(supply3+1),data=HPI_series2.w)
+
+m11 <- glm(log(grow1+1)~as.factor(oil_prod)+log(`2013.x`+10)+log(supply1+1),data=HPI_series2.w)
+m22 <- glm(grow22~as.factor(oil_prod)+log(`2013.x`+10)+log(supply2+1),data=HPI_series2.w)
+m33 <- glm(grow3~as.factor(oil_prod)+log(`2013.x`+10)+log(supply3+1),data=HPI_series2.w)
+
+m11 <- glm(log(grow1+1)~as.factor(oil_prod)+log(min_dist+1)+log(`2013.x`+10)+log(supply1+1),data=HPI_series2.w)
+m22 <- glm(grow22~as.factor(oil_prod)+log(min_dist+1)+log(`2013.x`+10)+log(supply2+1),data=HPI_series2.w)
+m33 <- glm(grow3~as.factor(oil_prod)+log(min_dist+1)+log(`2013.x`+10)+log(supply3+1),data=HPI_series2.w)
+
+m111 <- glm(log(grow1+1)~log(min_dist+1)+log(`2013.x`+10)+log(supply1+1),data=HPI_series2.w)
+m222 <- glm(grow22~log(min_dist+1)+log(`2013.x`+10)+log(supply2+1),data=HPI_series2.w)
+m333 <- glm(grow3~log(min_dist+1)+log(`2013.x`+10)+log(supply3+1),data=HPI_series2.w)
+#summary(m1)
+stargazer(m1,m2,m3,m11,m22,m33,type="text")
+
+```
+
+```{r DID, eval=FALSE}
+# standard DID. Y=beat0 + beta1*Treat + beta2*post + beta3*Treat*post + epsilon
+# the estimate of ATT is beta3 for the interaction term between the dummy for being treated and the dummy for obs post treatment.
+# for the HPI case, oil production cities and others are not balanced in major ways. can try PSM?
+
+# format data to long and define post treatment dummy variable.
+HPI_DID<-HPI_series2.w[,c(6,18,19,21)]
+HPI_DID$post<-0
+colnames(HPI_DID)<-c("HPI_rate","oil","post")
+HPI_DID2<-HPI_series2.w[,c(7,18,19,21)]
+HPI_DID2$post<-1
+colnames(HPI_DID2)<-c("HPI_rate","oil","post")
+HPI_DID<-rbind.data.frame(HPI_DID,HPI_DID2)
+DID1 <- lm(HPI_rate~ oil + post + oil:post, data=HPI_DID)
+summary(DID1)
+# cut1  oil:post coeff 0.425 not significant
+# cut2  oil:post coeff -0.515 not significant
+# cut3  oil:post coeff -0.055 not significant but the right sign
+# cut4  oil:post coeff -0.378 significant but the wrong sign
+```
+
+
+```{r conformal, eval=FALSE}
+# data: map2  use map data for convenience of weight matrix
+# variables: Tr:brent, Y:grow3, cut3.
+# test on all cities. 
+HPItestid <- c(1:370)  
+
+HPI_tr <- map2$oilgas_prod
+A_adj2 # 370*370 index by rows
+
+# map2 NA in ppl and supply in rows after 305
+HPI_covar <- map2[,c()]
+
+# growth rates in period 3.
+HPI_res1 <- conformal_ITE1(X=HPI_covar,Y=map2$grow3,
+                          testid=HPItestid,
+                          tr=HPI_tr,
+                          A=A_adj2,Atype="adj",
+                          ps_pred_model="multinom",
+                          ps=NA,G=NA,outfun="QRF",CQR=TRUE,retrainYmodel=TRUE)
+# change in growth rates over turning point 3.
+HPI_res2 <- conformal_ITE1(X=HPI_covar,Y=map2$cut3,
+                          testid=HPItestid,
+                          tr=HPI_tr,
+                          A=A_adj2,Atype="adj",
+                          ps_pred_model="multinom",
+                          ps=NA,G=NA,outfun="QRF",CQR=TRUE,retrainYmodel=TRUE)
+
+# save(HPI_res1,HPI_res2,file="HPI_ITE_results.Rdata")
+```
+
+```{r plot}
+
+HPI_res0<-cbind.data.frame(HPI_series2.w$AreaCode,HPI_res1[[1]],HPI_res1[[2]])
+colnames(HPI_res0) <- c("AreaCode","PO_lo11","PO_hi11","PO_lo10","PO_hi10","PO_lo01","PO_hi01","PO_lo00","PO_hi00",
+                        "spill1_lo","spill1_hi","spill0_lo","spill0_hi","direct1_lo","direct1_hi","direct0_lo","direct0_hi")
+map2 <- left_join(map2,HPI_res0,by=c("lad19cd"="AreaCode"))
+# plotting the estimated spillover effects
+plot1(map2, c("spill0_hi","spill0_lo"))
+plot1(map2, c("spill1_hi","spill1_lo"))
+
+
+```
+

@@ -305,7 +305,7 @@ X_nt_1<-X_ns_1
 Z_nt_1<-T_ns_1 # Z_nt_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
 T_nt_1<-paste0("t",Z_nt_1,G_nt_1)
 
-# save(A,ps_nt_1sum,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1b_5k.Rdata")
+# save(A,ps_nt_1sum,Y00_nt_1,Y01_nt_1,Y10_nt_1,Y11_nt_1,Y_nt_1,X_nt_1,Z_nt_1,G_nt_1,T_nt_1,file="datanet1new_5k.Rdata")
 ```
 
 
@@ -355,6 +355,46 @@ T_nt_2<-paste0("t",Z_nt_2,G_nt_2)
 save(ps_nt_2g,ps_nt_2z,Y00_nt_2,Y01_nt_2,Y10_nt_2,Y11_nt_2,Y_nt_2,X_nt_2,Z_nt_2,G_nt_2,T_nt_2,file="datanet2_5k.Rdata")
 ```
 
+```{r}
+YG1_nt_2<-0.5*Y1_ns_2 
+YG0_nt_2<-0
+YZ1_nt_2<-Y1_ns_2 # mean(X)
+YZ0_nt_2<-Y0_ns_2
+
+Y00_nt_2<-YZ0_nt_2+YG0_nt_2
+Y01_nt_2<-YZ0_nt_2+YG1_nt_2
+Y10_nt_2<-YZ1_nt_2+YG0_nt_2
+Y11_nt_2<-YZ1_nt_2+YG1_nt_2
+
+# propensities and realised outcome
+Xnei_nt_2 <- get_Xnei(X_ns_2,A,"adj")
+#Xnei_mean <- mean(Xnei_nt_1)
+#hist(Xnei_nt_1[,1]) 
+
+ps_nt_2g <- pnorm(Xnei_nt_2[,1]) 
+# plot(Xnei_nt_1[,1],ps_nt_1g,cex=.5)
+ps_nt_2z <- ps_ns_2
+ps_nt_2_11 <- ps_nt_2z*ps_nt_2g
+ps_nt_2_10 <- ps_nt_2z*(1-ps_nt_2g)
+ps_nt_2_01 <- (1-ps_nt_2z)*ps_nt_2g
+ps_nt_2_00 <- (1-ps_nt_2z)*(1-ps_nt_2g)
+ps_nt_2sum <- data.frame(t11=ps_nt_2_11,t10=ps_nt_2_10,t01=ps_nt_2_01,t00=ps_nt_2_00,
+                         z=ps_nt_2z,g=ps_nt_2g)
+
+
+G_nt_2 <- sapply(ps_nt_2g,function(x){rbinom(1,1,prob=x)})
+YG_nt_2 <- ifelse(G_nt_2==1,YG1_nt_2, 0)
+Y_nt_2<-Y_ns_2+YG_nt_2 
+#hist(YG1_nt_2)
+
+# summarise and save data
+X_nt_2<-X_ns_2
+Z_nt_2<-T_ns_2 # Z_nt_1 <- sapply(ps_ns_1,function(x){rbinom(1,1,prob=x)})
+T_nt_2<-paste0("t",Z_nt_2,G_nt_2)
+
+# save(ps_nt_2sum,Y00_nt_2,Y01_nt_2,Y10_nt_2,Y11_nt_2,Y_nt_2,X_nt_2,Z_nt_2,G_nt_2,T_nt_2,file="datanet2new_5k.Rdata")
+
+```
 
 ## net3. 
 From nt_2, add spatial non-stationarity in y=f_beta(x) to net2 outcome YZ.
@@ -402,7 +442,8 @@ for (i in 1:n){
     g3$YG[i] =0.2*mean(g3$YZ[neigh])
 }
 # all POs.
-YG1_nt_3<-g3$YG
+# YG1_nt_3<-g3$YG
+YG1_nt_3<-0.5*YZ1_nt_3
 YG0_nt_3<-0
 #YZ1_nt_3
 YZ0_nt_3<-Y0_ns_2
@@ -413,15 +454,19 @@ Y10_nt_3<-YZ1_nt_3+YG0_nt_3
 Y11_nt_3<-YZ1_nt_3+YG1_nt_3
 
 # actual outcome
-g3$YG <- ifelse(g3$G >0.5, g3$YG, 0)
-
-Y_nt_3<-g3$YZ+g3$YG
+#g3$YG <- ifelse(g3$G >0.5, YG1_nt_3, 0)
 X_nt_3<-X_ns_2
+Xnei_nt_3g <- get_Xnei(X_nt_3,A,"adj")
+ps_nt_3g <- pnorm(Xnei_nt_3g[,1]) # closely centered around 0.5
+G_nt_3 <- sapply(ps_nt_3g,function(x){rbinom(1,1,prob=x)})
+g3$YG <- ifelse(G_nt_3==1, YG1_nt_3, 0)
+Y_nt_3<-g3$YZ+g3$YG
+
 # A_adj
 Z_nt_3<-g3$Z
 G_nt_3<-ifelse(g3$G >0.5, 1, 0)
 T_nt_3<-paste0("t",Z_nt_3,G_nt_3)
-save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3_5k.Rdata")
+save(Y00_nt_3,Y01_nt_3,Y10_nt_3,Y11_nt_3,Y_nt_3,X_nt_3,Z_nt_3,G_nt_3,T_nt_3,file="datanet3new_5k.Rdata")
 ```
 
 ```{r net3_plots, eval=FALSE}
@@ -488,7 +533,8 @@ for (i in 1:n){
 }
 # all POs. 
 # from here, it's clear that YG is conditional on the observed YZ i.e. the pattern of YZ
-YG1_nt_4<-g4$YG
+#YG1_nt_4<-g4$YG
+YG1_nt_4<-0.5*YZ_nt_4  # define YG independently from Xnei
 YG0_nt_4<-0 
 
 Y00_nt_4<-YZ0_nt_4+YG0_nt_4
@@ -503,7 +549,7 @@ ps_nt_4g <- pnorm(Xnei_nt_4g[,1]) # closely centered around 0.5
 # hist(Xnei_nt_4g[,1])
 # hist(ps_nt_4g) 
 G_nt_4 <- sapply(ps_nt_4g,function(x){rbinom(1,1,prob=x)})
-g4$YG <- ifelse(G_nt_4==1, g4$YG, 0)
+g4$YG <- ifelse(G_nt_4==1, YG1_nt_4, 0)
 Y_nt_4<-g4$YZ+g4$YG 
 T_nt_4<-paste0("t",Z_nt_4,G_nt_4)
 
@@ -513,7 +559,7 @@ ggplot(mapcheck,aes(x=x,y=y,color=`1`))+geom_point(size=2)+scale_colour_gradient
 ggplot(mapcheck2,aes(x=x,y=y,color=`V1`))+geom_point(size=2)+scale_colour_gradient2()
 ggplot(mapcheck2,aes(x=x,y=y,color=`1`))+geom_point(size=2)+scale_colour_gradient2()
 
-save(ps_nt_4g,ps_nt_4z,Y00_nt_4,Y01_nt_4,Y10_nt_4,Y11_nt_4,Y_nt_4,X_nt_4,Z_nt_4,G_nt_4,T_nt_4,file="datanet4_5k.Rdata")
+save(ps_nt_4g,ps_nt_4z,Y00_nt_4,Y01_nt_4,Y10_nt_4,Y11_nt_4,Y_nt_4,X_nt_4,Z_nt_4,G_nt_4,T_nt_4,file="datanet4new_5k.Rdata")
 
 ```
 
@@ -767,14 +813,35 @@ test10_local_cov
 ```
 
 ```{r plot_coverage}
-cov=rnorm(600,90)
-Tr0=rep(c("11","10","01","00"),each=30)
-Tr=c(Tr0,Tr0,Tr0,Tr0,Tr0)
-test=rep(c("test6","test7","test8","test9","test10"),each=120)
-testplot<-data.frame(cov,Tr,test)
+t6<-test6_cov[,1:4]
+colnames(t6)<-c("1","2","3","4")
+t6$test<-6
+t6<- pivot_longer(t6,!test,names_to="Tr",values_to="cov")
+
+t7<-test7_cov[,1:4]
+colnames(t7)<-c("1","2","3","4")
+t7$test<-7
+t7<- pivot_longer(t7,!test,names_to="Tr",values_to="cov")
+
+t8<-test8_cov[,1:4]
+colnames(t8)<-c("1","2","3","4")
+t8$test<-8
+t8<- pivot_longer(t8,!test,names_to="Tr",values_to="cov")
+
+t9<-test9_cov[,1:4]
+colnames(t9)<-c("1","2","3","4")
+t9$test<-9
+t9<- pivot_longer(t9,!test,names_to="Tr",values_to="cov")
+
+t10<-test10_global_cov[,1:4]
+colnames(t10)<-c("1","2","3","4")
+t10$test<-10
+t10<- pivot_longer(t10,!test,names_to="Tr",values_to="cov")
+
+testplot<-rbind.data.frame(t6,t7,t8,t9,t10)
 
 par(mar=c(3,4,3,1))
-boxplot(cov~Tr*test,data=testplot,boxwex=0.4,ylab="coverage %",
+boxplot(cov~Tr*test,data=testplot,boxwex=0.4,ylab="coverage",
         main="Coverage of potential outcomes",
         col=c("slateblue1","lightblue","pink","tomato"),
         xaxt="n")
@@ -786,4 +853,44 @@ legend("bottomright", legend = c("t11","t10","t01","t00"),
        col=c("slateblue1","lightblue","pink","tomato"),
        pch = 15, bty = "n", pt.cex = 2, cex = 1,  horiz = T, inset = c(0, 0))
 ```
+```{r plot_ITElength}
+t6<-test6_cov[,5:8]
+colnames(t6)<-c("1","2","3","4")
+t6$test<-6
+t6<- pivot_longer(t6,!test,names_to="Tr",values_to="cov")
 
+t7<-test7_cov[,5:8]
+colnames(t7)<-c("1","2","3","4")
+t7$test<-7
+t7<- pivot_longer(t7,!test,names_to="Tr",values_to="cov")
+
+t8<-test8_cov[,5:8]
+colnames(t8)<-c("1","2","3","4")
+t8$test<-8
+t8<- pivot_longer(t8,!test,names_to="Tr",values_to="cov")
+
+t9<-test9_cov[,5:8]
+colnames(t9)<-c("1","2","3","4")
+t9$test<-9
+t9<- pivot_longer(t9,!test,names_to="Tr",values_to="cov")
+
+t10<-test10_global_cov[,5:8]
+colnames(t10)<-c("1","2","3","4")
+t10$test<-10
+t10<- pivot_longer(t10,!test,names_to="Tr",values_to="cov")
+
+testplot<-rbind.data.frame(t6,t7,t8,t9,t10)
+
+par(mar=c(3,4,3,1))
+boxplot(cov~Tr*test,data=testplot,boxwex=0.4,ylab="Length",
+        main="Length of interval",
+        col=c("slateblue1","lightblue","pink","tomato"),
+        xaxt="n")
+axis(1,at=seq(2.5,22,4),labels=c("test6","test7","test8","test9","test10"),tick=FALSE,cex=0.3)
+for(i in seq(0.5 , 20 , 4)){ 
+  abline(v=i,lty=1, col="grey")
+}
+legend("topright", legend = c("spillover1","spillover0","direct1","direct0"), 
+       col=c("slateblue1","lightblue","pink","tomato"),
+       pch = 15, bty = "n", pt.cex = 2, cex = 1,  horiz = T, inset = c(0, 0))
+```

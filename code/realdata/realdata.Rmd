@@ -1,0 +1,768 @@
+---
+title: "realdata"
+author: "mira"
+date: "25/07/2022"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(corrplot)
+library(corrgram)
+library(readxl)
+library(readr)
+library(tidyverse)
+library(viridis)
+library(RColorBrewer)
+library(data.table)
+library(ggplot2)
+library(cdlTools)
+library(stargazer)
+library(sf)
+library(spdep)
+library(tmap)
+library(lmtest)
+library(igraph)
+library(grf)
+library(gbm)
+library(randomForest)
+library(DescTools)
+library(bartMachine)
+```
+
+```{r}
+source("gps_weight_cf.R")
+```
+
+
+## import data
+
+```{r import_data, eval=FALSE}
+# local authorities HPI 01/2004-01/2022 (on average and by house type)
+HPI_series <- read_csv("HPI_series.csv")
+areas <- unique(HPI_series$AreaCode) # 421 local authorities
+# Brent historical spot oil price (dollar per barrel) 2004-2022
+brent_series <- read_excel("brent_series.xlsx") # 217 obs
+# SP 500 historical price 2004-2019
+#SP<-read_csv("SP500.csv")
+# UKFTSE100 historical price 2004-2019
+#UKFT<-read_csv("UKFTSE100.csv")
+sd(brent_series$brentprice) # 25.68
+
+```
+
+
+```{r format_HPI, eval=FALSE}
+HPI_series<-HPI_series[,c(1,4,5,7,8,9)] # date, area, areacode, index, 1m%, 12m%
+HPI_series2<-HPI_series[,c(1,3,5)] # date, areacode, 1m%,
+HPI_series2.w <- HPI_series2 %>% pivot_wider(names_from=Date,values_from = `1m%Change`)
+HPI_series2.w <-HPI_series2.w [,1:218]
+
+# selected shocks by 1 sd
+
+# shock 1: 2008 Sep-Oct crash
+# average monthly growth prior 2008/01-2008/07
+HPI_series2.w$prior1 <- rowMeans(HPI_series2.w[,50:56])
+# average monthly growth post 2008/12-2009/06
+HPI_series2.w$post1 <- rowMeans(HPI_series2.w[,61:67])
+
+# shock 2: 2014 Nov-Dec crash
+# average monthly growth prior 2014/05-2014/10
+HPI_series2.w$prior2 <- rowMeans(HPI_series2.w[,126:131])
+# average monthly growth post 2015/04-2015/09
+HPI_series2.w$post2 <- rowMeans(HPI_series2.w[,137:142])
+
+# shock 3: 2020 Feb-Mar crash
+# average monthly growth prior 2019/08-2020/01
+HPI_series2.w$prior3 <- rowMeans(HPI_series2.w[,188:194])
+# average monthly growth post 2020/07-2020/12
+HPI_series2.w$post3 <- rowMeans(HPI_series2.w[,200:205])
+
+
+HPI_series2.w <- HPI_series2.w[,c(1,219:224)]
+# maybe calculate average growth rate differently? from start and end HPI ?
+# use HPI levels?
+HPI_series2.w$cut1<-HPI_series2.w$post1-HPI_series2.w$prior1
+HPI_series2.w$cut2<-HPI_series2.w$post2-HPI_series2.w$prior2
+HPI_series2.w$cut3<-HPI_series2.w$post3-HPI_series2.w$prior3
+
+median(HPI_series2.w$cut1)  #-0.2284273
+median(HPI_series2.w$cut2) #-0.1339175
+median(HPI_series2.w$cut3) #0.8001431
+
+par(mfrow=c(2,2))
+hist(HPI_series2.w $cut1) # mean is negative, HPI growth decelerated 
+hist(HPI_series2.w $cut2) # mean is negative,HPI growth decelerated 
+hist(HPI_series2.w $cut3) # mean is positive, HPI growth accelerated after the crash
+
+```
+
+
+```{r HPI_map, eval=FALSE}
+# map the house price growth across LAs
+map <- st_read('Local_Authority_Districts_(December_2019)_Boundaries_UK_BUC.shp')
+#class(map) # sf
+#head(map) # LA ID in lad19cd, 382 obs
+map <- left_join(map,HPI_series2.w,by=c("lad19cd"="AreaCode"))
+
+plot1<-function(map,c,label,palette,mid){
+  tm_shape(map)+
+  tm_fill(col=c(c),title=label,palette=palette,style = "quantile", n = 5,midpoint=mid)+
+  tm_borders(col='black',lwd=0.1)+
+  tm_scale_bar()+
+  tm_layout(legend.outside = TRUE)
+}
+
+# plot the drop in HPI growth rates over the three oil price crashes
+plot1(map,c("cut1"),"Change over shock 1","-BrBG",0) # oil regions above mean ???
+plot1(map,c("cut2"),"Change over shock 2","-BrBG",0) # oil regions below mean
+plot1(map,c("cut3"),"Change over shock 3","-BrBG",0) # oil regions below mean
+plot1(map,c("oilgas_prod"),"Oil gas industry hubs","-BrBG",0)
+```
+
+
+```{r oil_loc, eval=FALSE}
+# add measurements of oil industry concentration, based on ONS labour statistics
+oil_prod <- c("E09000001","E09000033","E07000085","E10000030","S12000034","E07000209")
+oilgas_prod <- c("E09000001","E09000033","E07000085","E10000030","S12000034","E07000209","E08000022","E07000127","E07000147","E07000146","E06000011","E08000021")
+
+map$oilgas_prod <- ifelse(map$lad19cd%in%oilgas_prod,1,0) 
+HPI_series2.w$oilgas_prod<- ifelse(HPI_series2.w$AreaCode%in%oilgas_prod,1,0) 
+
+# check group means, for all three shocks, oil regions mean is lower than others
+mean(HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==1)])
+mean(HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==0)])
+
+# sub sample non-oil HPI to fix variance
+HPI_sample<-data.frame(prior1=HPI_series2.w$prior1,
+                       prior2=HPI_series2.w$prior2,
+                       prior3=HPI_series2.w$prior3,
+                       post1=HPI_series2.w$post1,
+                       post2=HPI_series2.w$post2,
+                       post3=HPI_series2.w$post3,
+                       cut1=HPI_series2.w$cut1,
+                       cut2=HPI_series2.w$cut2,
+                       cut3=HPI_series2.w$cut3,
+                       oil=HPI_series2.w$oilgas_prod)
+HPI_sample<-HPI_sample[which(HPI_sample$oil==0),] # 409
+HPI_rowsample<-sample(409,12)
+HPI_sample<-HPI_sample[HPI_rowsample,]
+
+# full data
+par(mfrow=c(1,3))
+boxplot(HPI_series2.w$prior1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$prior1[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$prior2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$prior2[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$prior3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$prior3[which(HPI_series2.w$oilgas_prod==0)],
+        main="Growth rate prior to shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        ylab="HPI Growth rate",
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(0.5,2.5,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+boxplot(HPI_series2.w$post1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$post1[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$post2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$post2[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$post3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$post3[which(HPI_series2.w$oilgas_prod==0)],
+        main="Growth rate after shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(0.5,2.45,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+boxplot(HPI_series2.w$cut1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut1[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$cut2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut2[which(HPI_series2.w$oilgas_prod==0)],
+        HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==0)],
+        main="Growth rate change over shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(0.5,2.2,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+
+# subsampled data
+par(mfrow=c(1,3))
+boxplot(HPI_series2.w$prior1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$prior1,
+        HPI_series2.w$prior2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$prior2,
+        HPI_series2.w$prior3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$prior3,
+        main="Prior to shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        ylab="HPI Growth rate",
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(4,-0.7,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+boxplot(HPI_series2.w$post1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$post1,
+        HPI_series2.w$post2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$post2,
+        HPI_series2.w$post3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$post3,
+        main="After shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(4,-1.05,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+boxplot(HPI_series2.w$cut1[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$cut1,
+        HPI_series2.w$cut2[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$cut2,
+        HPI_series2.w$cut3[which(HPI_series2.w$oilgas_prod==1)],
+        HPI_sample$cut3,
+        main="Change over shocks", outline=FALSE,
+        names=c("oil","non","oil","non","oil","non"),
+        col=c("khaki","khaki","tan","tan","tan2","tan2"))
+legend(4,-1.08,c("2008","2014","2020"),fill=c("khaki","tan","tan2"))
+
+
+ggplot(data=HPI_series2.w,aes(x=1,y=cut1))+geom_boxplot()
+# does it look different with outliers removed?
+
+```
+
+```{r import_covars, eval=FALSE}
+# crime, do not use
+rec_crimeLA <- read_csv("data1/rec_crimeLA.csv")
+rec_crimeLA <-rec_crimeLA[-c(1:179856,22951:57186),c(3,6,7)] # yr 2013
+crime <- rec_crimeLA[which(rec_crimeLA$Offence=="Criminal damage and arson"),]
+# length(unique(crime$`ONS Code`)) # only 311 and lots of 'placeholder' ???
+crime <-crime[,-2]
+colnames(crime)<-c("AreaCode","offences")
+
+# population and household income
+population <- read_excel("data1/grosshouseholdincomeLA19972015.xlsx", sheet = "Population")
+pop13<-population[,c(2,20)]
+colnames(pop13)<-c("AreaCode","pop2013")
+pop13<-left_join(pop13,map[,c(2,9)],by=c("AreaCode"="lad19cd"))
+pop13$popden<-pop13$pop2013/(pop13$st_areasha*0.0001)
+pop13<-pop13[,c(1,5)]
+
+income <- read_excel("data1/grosshouseholdincomeLA19972015.xlsx", sheet = "Gross disposable income")
+income13<-income[,c(2,20)]
+colnames(income13)<-c("AreaCode","income2013")
+income16<-income[,c(2,23)]
+colnames(income16)<-c("AreaCode","income2016")
+length(pop13$AreaCode) # 391
+
+# GDP, GDPPC, GVA, another population count
+GVA <- read_excel("data1/GDP_LA1998-2020.xlsx", sheet = "GVA_cur_price")
+GDP <- read_excel("data1/GDP_LA1998-2020.xlsx", sheet = "GDP_cur_price")
+GDPPC <- read_excel("data1/GDP_LA1998-2020.xlsx", sheet = "GDPPC_cur_price")
+resident <- read_excel("data1/GDP_LA1998-2020.xlsx", sheet = "resident_pop")
+GVA13 <- GVA[,c(2,19)]
+colnames(GVA13)<-c("AreaCode","GVA13")
+GVA19 <- GVA[,c(2,25)]
+colnames(GVA19)<-c("AreaCode","GVA19")
+
+GDP13 <- GDP[,c(2,19)]
+colnames(GDP13)<-c("AreaCode","GDP13")
+GDPPC13 <- GDPPC[,c(2,19)]
+colnames(GDPPC13)<-c("AreaCode","GDPPC13")
+resident13 <- resident[,c(2,19)]
+colnames(resident13)<-c("AreaCode","resident13")
+length(GDPPC13$AreaCode) # 374
+
+# employment
+employ2015 <- read_excel("data1/employcharacteristicsLA2015.xls", sheet = "Table 1")
+employ <-employ2015[,c(1,5,8,10,11,15,25,28,30,31,33,34)]
+employ[293,9]<-"20"
+employ$demale_lfexp<-as.numeric(employ$demale_lfexp)
+length(employ$AreaCode) # 379
+
+# energy consumption (and domestic units supply ?)
+# the number of new meters across years can sub for supply. Table 122 is England only.
+electricity13 <- read_excel("data1/electricityLA2005-2020.xlsx", sheet = "2013")
+electricity13 <-electricity13[,c(1,6,7,11,12,16,17)]
+colnames(electricity13)<-c("AreaCode","dom_count13","n_dom_count13","dom_consum13","n_dom_consum13","mean_dom13","mean_n_dom13")
+electricity14 <- read_excel("data1/electricityLA2005-2020.xlsx", sheet = "2014")
+electricity14 <-electricity14[,c(1,6)]
+colnames(electricity14)<-c("AreaCode","dom_count14")
+electricity<-left_join(electricity13,electricity14,by="AreaCode")
+electricity$supply<-electricity$dom_count14-electricity$dom_count13
+electricity<-electricity[,-8]
+length(electricity$AreaCode) # 380
+
+electricity19 <- read_excel("data1/electricityLA2005-2020.xlsx", sheet = "2019")
+electricity19 <-electricity19[,c(1,6,7,11,12,16,17)]
+colnames(electricity19)<-c("AreaCode","dom_count19","n_dom_count19","dom_consum19","n_dom_consum19","mean_dom19","mean_n_dom19")
+electricity20 <- read_excel("data1/electricityLA2005-2020.xlsx", sheet = "2020")
+electricity20 <-electricity20[,c(1,6)]
+colnames(electricity20)<-c("AreaCode","dom_count20")
+
+electricity19<-left_join(electricity19,electricity20,by="AreaCode")
+electricity19$supply19<-electricity19$dom_count20-electricity19$dom_count19
+electricity19<-electricity19[,-8]
+
+# migration rate (do not use)
+migrationLA20122016 <- read_excel("data1/migrationLA20122016.xls", sheet = "2013")
+migration <- migrationLA20122016[-c(1:18),c(4,8:11)]
+colnames(migration)<-c("AreaCode","turn_int","inflow_int","outflow_int","turn_dom")
+migration$turn_int<-as.numeric(migration$turn_int)
+migration$inflow_int<-as.numeric(migration$inflow_int)
+migration$outflow_int<-as.numeric(migration$outflow_int)
+migration$turn_dom<-as.numeric(migration$turn_dom)
+length(migration$AreaCode)# 425
+
+# industry LQ
+LQ2015 <- read_excel("data1/LQLA2015.xls", sheet = "LALQ")
+LQ2015 <- LQ2015[,c(2,8,9,10,14,15,18,19,20)]
+LQ2015[349,6]<-LQ2015[369,6]<-LQ2015[379,6]<-"0.05"
+LQ2015$Professional<-as.numeric(LQ2015$Professional)
+LAs<-GVA[,c(2,3)]
+colnames(LAs)<-c("AreaCode","Area")
+LQ2015<-left_join(LQ2015,LAs)
+# LAlist<-map$lad19cd
+# LQ2015<-left_join(LQ2015,LAlist)
+LQ2015[c(99:105,179,184,187:189,235:238,262,291,297,310:315,325:327,340,342,360,361),10]<-c("E07000150","E07000151","E07000152","E07000153","E07000154","E07000155","E07000156","E07000146","E07000201","E07000204","E07000205","E07000206","E07000004","E07000005","E07000006","E07000007","E07000112","E06000028","E06000029","E07000048","E07000049","E07000050","E07000051","E07000052","E07000053","E07000190","E07000191","W06000001","W06000014","W06000016","S12000036","S12000013") # fixing some AreaCode
+LQ2015<-LQ2015[,-1] # lose the Area name
+length(LQ2015$AreaCode) # 380
+
+# covars 
+LAlist<-data.frame(AreaCode=map$lad19cd,Area=map$lad19nm)
+
+covars<-list(LAlist,pop13,income13,GVA13,GDP13,GDPPC13,employ,electricity,LQ2015)%>%reduce(left_join,by="AreaCode") 
+# Northern Ireland mostly missing except for GDP related.
+nacount<-c()
+for (i in 1:31){
+  nacount[i]=length(which(is.na(covars[,i+2])))
+}
+nacount
+# migration too many missing, use employ/migration instead
+# GDP LAs are diff from others'
+
+covars0<-drop_na(covars)
+# obs 350 out of 382 LAs
+# some LA codes are not matching
+
+corr<-cor(covars0[,-c(1,2)])
+corrplot(corr,tl.col="black",tl.cex=0.6)
+# check colinearity and corr with cut2, drop some vars
+covars0<-covars0[,-c(6,7,8,13,17,19,20,21,22,27,28,33)] # 19 vars left
+
+#covars0<-left_join(covars0,HPI_series2.w[,c(1,15)])
+#corr<-cor(covars0[,-c(1,2)])
+covars_check<- left_join(covars0,HPI_series2.w)
+# covars_check$min_dist<-min_dist$min_dist
+lm1<-lm(cut2~popden+income2013+GVA13+growing_ind+net_new_busi2015+pop_w_degree2015+popm16_r_2015+intn_mig_net+demale_lfexp+employ_rate2015+high_skills+mean_dom13+mean_n_dom13+supply+Construction+oilgas_prod+prior2+min_dist,data=covars_check)
+summary(lm1) 
+# with the addition of prior growth rates cut1 cut2 cut3 R square 0.37 0.54 0.34
+# with post growth rates cut1 cut2 cut3 R square 0.54 0.56 0.79
+
+covars0$prior2<-covars_check$prior2
+covars13<-covars0
+covars19<-covars13[,-c(5,14:16,22)]
+covars19<-left_join(covars19,GVA19)
+covars19<-left_join(covars19,electricity19[,c(1,6:8)])
+covars19$prior3<-covars_check$prior3
+covars19$post3<-covars_check$post3
+which(is.na(covars19))
+
+covars_check2<- left_join(covars19,HPI_series2.w)
+# covars_check2$min_dist<-min_dist$min_dist
+lm2<-lm(cut3~popden+income2013+GVA19+growing_ind+net_new_busi2015+pop_w_degree2015+popm16_r_2015+intn_mig_net+demale_lfexp+employ_rate2015+high_skills+mean_dom19+mean_n_dom19+supply19+Construction+oilgas_prod+prior3+min_dist,data=covars_check2)
+summary(lm2) 
+# R square does not differ from just using 2013 data
+
+# scale a few variables
+covars13$income2013<-covars13$income2013/1000
+covars13$GVA13<-covars13$GVA13/1000
+covars13$intn_mig_net<-covars13$intn_mig_net/100
+covars13$mean_dom13<-covars13$mean_dom13/1000
+covars13$mean_n_dom13<-covars13$mean_n_dom13/10000
+
+covars19$income2013<-covars19$income2013/1000
+covars19$GVA19<-covars19$GVA19/1000
+covars19$intn_mig_net<-covars19$intn_mig_net/100
+covars19$mean_dom19<-covars19$mean_dom19/1000
+covars19$mean_n_dom19<-covars19$mean_n_dom19/10000
+
+save(covars13,covars19,file="covars1319.Rdata")
+```
+
+
+
+```{r merge_data2, eval=FALSE}
+# add more covariates
+HPI_series2.w <- left_join(HPI_series2.w,covars0,by="AreaCode")
+map <- left_join(map,covars13,by=c("lad19cd"="AreaCode"))
+
+```
+
+
+```{r A_matrix, eval=FALSE}
+# generate matrix after all covars are added to map and all NA rows are dropped.
+map2<-map[,-4]
+map2<-drop_na(map2) # 350 obs
+
+map13<-map[,-4]
+map13<-drop_na(map13)
+map19<-map[,-4]
+map19<-drop_na(map19)
+
+# create distance/adj matrix 
+centroids <- st_point_on_surface(x=map2)
+distance_matrix <- st_distance(centroids,centroids) # 382 * 382 with m as unit
+dist<-list()
+for (i in 1:350){dist[[i]]<-as.numeric(distance_matrix[,i])}
+dist<- do.call(cbind.data.frame,dist)
+colnames(dist)<-map2$lad19cd
+
+# set a distance threshold and create adj matrix
+A_adj<-list()
+for (i in 1:350){A_adj[[i]]<-ifelse(dist[,i]<50000,1,0)}
+A_adj<- do.call(cbind.data.frame,A_adj)
+colnames(A_adj)<-map2$lad19cd # A-adj is symmetric
+# A_adj<-t(A_adj)
+# hist(rowSums(A_adj))
+# quantile(rowSums(A_adj),0.8) # 0.05-3  0.8-36  
+
+# cap A_adj connections at 20 neighbors
+n20<-list()
+for (i in 1:350){
+  t<-as.numeric(dist[i,])
+  ord<- order(t)
+  thresh<-t[ord[21]]
+  n20[[i]]<-ifelse(t<thresh,1,0)
+}
+n20<- do.call(cbind.data.frame,n20)
+colnames(n20)<-map2$lad19cd
+n20<-t(n20)
+# rowSums(n25) # ==25  colSums != 25, near neigh matrix not symmetric
+A_adj2<-A_adj*n20
+
+# handle island LAs
+isl<-list()
+island<-which(rowSums(A_adj2)<4) 
+for (i in 1:length(island)){
+  idx<-island[i]
+  t<-as.numeric(dist[idx,])
+  ord<- order(t)
+  thresh<-t[ord[4]]
+  isl<-ifelse(t<thresh,1,0)
+  A_adj2[idx,]<-t(isl)
+}
+diag(A_adj2)<-0
+# hist(rowSums(A_adj2))
+
+
+# KNN8 matrix
+n8<-matrix(nrow=350,ncol=350)
+for (i in 1:350){
+  t<-as.numeric(dist[i,])
+  ord<- order(t)
+  thresh<-t[ord[10]]
+  n8[i,]<-ifelse(t<thresh,1,0)
+}
+diag(n8)<-0
+#rowSums(n8)
+
+# map the connections
+net<-graph_from_adjacency_matrix(as.matrix(A_adj2),mode="undirected")
+vertex_attr(net,"x")<-map2$long
+vertex_attr(net,"y")<-map2$lat
+plot(net,vertex.size = 2,vertex.label = NA,
+     axes=TRUE,margin=c(0,0,0,0),main="LA neighbour structure",xlim=c(-1,1))
+
+```
+
+```{r dist2nearest_hub, eval=FALSE}
+# calculate each LA's distance to nearest oil_gas production hubs
+# get ID of oil_gas hubs and select columns in distance matrix with such ID
+
+ID <- which(centroids$lad19cd%in%oilgas_prod)
+dist2hub <- as.data.frame(distance_matrix[,ID]) #350*11
+# get every LA's distance to the nearest hub
+min_dist<- NULL
+for (i in 1:350) {
+  min_dist[i] <- min(dist2hub[i,])
+}
+min_dist<- as.data.frame(min_dist)
+min_dist$AreaCode<-centroids$lad19cd
+min_dist$min_dist<-(min_dist$min_dist+1)/10000
+# HPI_series2.w <- left_join(HPI_series2.w,min_dist)
+hist(log(min_dist$min_dist)) # looks fine
+```
+
+
+```{r}
+save(A_adj,A_adj2,map,map13,map19,HPI_series2.w,file="HPI_data.Rdata")
+```
+
+
+```{r naiveDID, eval=FALSE}
+# standard DID. Y=beat0 + beta1*Treat + beta2*post + beta3*Treat*post + epsilon
+# the estimate of ATT is beta3 for the interaction term between the dummy for being treated and the dummy for obs post treatment.
+# for the HPI case, oil production cities and others are not balanced in major ways. can try PSM?
+
+# format data to long and define post treatment dummy variable.
+HPI_DID<-HPI_series2.w[,c(6,18,19,21)]
+HPI_DID$post<-0
+colnames(HPI_DID)<-c("HPI_rate","oil","post")
+HPI_DID2<-HPI_series2.w[,c(7,18,19,21)]
+HPI_DID2$post<-1
+colnames(HPI_DID2)<-c("HPI_rate","oil","post")
+HPI_DID<-rbind.data.frame(HPI_DID,HPI_DID2)
+DID1 <- lm(HPI_rate~ oil + post + oil:post, data=HPI_DID)
+summary(DID1)
+# cut1  oil:post coeff 0.425 not significant
+# cut2  oil:post coeff -0.515 not significant
+# cut3  oil:post coeff -0.055 not significant but the right sign
+# cut4  oil:post coeff -0.378 significant but the wrong sign
+```
+
+## prepare testid and test ps estimation
+```{r}
+# estimate G, this only depends on the network specification, not on the covariates.
+
+HPI_tr <- map13$oilgas_prod # 11
+A_adj2<-as.matrix(A_adj2) # 350*350 index by rows
+
+G_est<-get_trnei1(HPI_tr,n8,"adj") 
+G_est2<-get_trnei1(HPI_tr,A_adj2,"adj")
+
+T_est <- data.frame(AreaCode=map13$lad19cd,tr=paste0("t",HPI_tr,G_est))
+T_est2 <- data.frame(AreaCode=map13$lad19cd,tr=paste0("t",HPI_tr,G_est2))
+
+length(which(T_est$tr=="t01")) # 68
+length(which(T_est2$tr=="t01")) # 110
+
+# since there are only 11 treated units. the sum of t11 and t10 will be 11
+# there is not enough data to estimate ps for these treatment levels
+# instead, can estimate ps for t01 and t00 to predict spillover effect for control units as obs_Y01-est_Y00.
+# t01 t00 counts under diff cutoff setting 
+# adj2: 0.05/ 0.01(110,229)
+# n8 0.01/ 0.05(68,271)
+
+HPItestid <- which(T_est$tr=="t01") 
+# HPItestid <- which(T_est2$tr=="t01") 
+length(HPItestid) # 68/ 110
+
+```
+
+
+```{r}
+# test whether ps estimation works
+# estimating G=1 with existing covariate vs further adding distance to nearest hub
+HPI_covar13 <-st_drop_geometry(map13)
+HPI_covar13 <- HPI_covar13[,21:40]
+HPI_covar13 <- cbind.data.frame(HPI_covar13,min_dist=min_dist[,1])
+
+# summary(HPI_covar13)
+testGest<-cbind.data.frame(G_est2,HPI_covar13)
+glm1<-glm(G_est2~.,data=testGest)
+summary(glm1)
+PseudoR2(glm1) # 0.17 vs 0.47
+
+```
+
+
+
+## shock 2014
+```{r conformal2014, eval=FALSE}
+# HPItestid <- sample(350,3) 
+
+
+# with 70% coverage. QRF cannot work with such small sample size. use QBART.
+HPI_res2 <- conformal_ITE_e(X=HPI_covar13,Y=map13$cut2,
+                          testid=HPItestid,
+                          tr=HPI_tr,
+                          A=A_adj2,Atype="adj",
+                          ps_pred_model="binomial",
+                          ps=NA,G=NA,outfun="QBART",CQR=TRUE,retrainYmodel=TRUE)
+
+# range(map13$cut2) # -5.861354  1.979487
+
+cut2PO<-HPI_res2[[1]] # -3.220409	2.001505	-0.8709115	0.7763741
+cut2ITE<-HPI_res2[[2]]
+
+# for t01 units: measure spillover as the diff between estimated t00 and observed t01
+cut2PO$lad19cd<-map13$lad19cd[HPItestid]
+cut2PO$cut2<-map13$cut2[HPItestid]
+cut2PO$ite2up<-cut2PO$up00-cut2PO$cut2
+cut2PO$ite2low<-cut2PO$low00-cut2PO$cut2
+
+# for most t01 LAs the 00 bounds contains the observed 01 outcome ???
+# find LAs stat sig experiencing negative effect i.e. both bounds are positive
+cut2PO$lad19cd[which(cut2PO$ite2low>0 & cut2PO$ite2up>0)] 
+# 68obs 
+# 0.9 110 obs "E07000120" "E09000020" "S12000033" Hyndburn, Kensington Chelsea, Aberdeen city
+# 0.7 "E06000040" "E07000010" "E07000087" "E07000094" "E07000119" "E07000120" "E07000149" "E07000211" "E07000223" "E07000224" "E09000013" "E09000019" "E09000020" "E09000021" "E09000025" "E09000029" "E09000031" "S12000020" "S12000033"
+# Windsor Maidenhead, Fenland, Fareham, Winchester, Fylde, Hyndburn, South Norfolk, Reigate Banstead, Adur, Arun, Hammersmith Fulham, Islington, Kensington Chelsea, Kingston upon Thames, Newham, Sutton, Waltham Forest, Moray, Aberdeen city
+# adding distance "E06000040" "E07000010" "E07000087" "E07000089" "E07000120" "E07000207" "E07000211" "E07000223" "E07000224" "E09000012" "E09000013" "E09000014" "E09000020" "E09000025" "S12000020" "S12000033"
+
+
+# some LAs both bounds negative, y00<y01 why?
+cut2PO$lad19cd[which(cut2PO$ite2up<0 & cut2PO$ite2low<0)] 
+# 68 obs
+# 0.9 110 obs  "E07000167" Ryedale
+# 0.7 "E06000012" "E06000046" "E07000167" "E07000216"
+# adding distance "E06000012" "E06000038" "E06000044" "E07000167"
+
+# interval lengths
+cut2PO$int_length<-cut2PO$ite2up-cut2PO$ite2low
+hist(cut2PO$int_length) # mostly 0.9:2.5-4 ; 0.7: 1-2
+# hist(cut2ITE$spill_up-cut2ITE$spill_lo) # mostly 7-9
+
+# plot with 'map', map2 only 350 LAs
+map<-map[,-c(47:49)]
+map<-left_join(map,cut2PO[,c(5,7:9)])
+plot1(map, c("ite2up"),"ITE upper bound","-BrBG",0)
+plot1(map, c("ite2low"),"ITE lower bound","-BrBG",0) 
+plot1(map, c("int_length"),"Interval length","-BrBG",0)
+# plot1(map, c("low00"),0)
+# plot1(map, c("up00"),0)
+# save(HPI_res2,file="HPI_res14add_dist.Rdata")
+```
+
+## shock 2020
+```{r conformal2020, eval=FALSE}
+# using same network, testID, G_est, T_est, Nei
+HPI_covar19 <-st_drop_geometry(map19)
+#HPI_covar19 <- HPI_covar19[,21:40] # uses prior3
+HPI_covar19 <- HPI_covar19[,c(15,21:39)] # uses post3
+HPI_covar19 <- cbind.data.frame(HPI_covar19,min_dist=min_dist[,1])
+
+HPI_res3 <- conformal_ITE_e(X=HPI_covar19,Y=map19$cut3,
+                          testid=HPItestid,
+                          tr=HPI_tr,
+                          A=A_adj2,Atype="adj",
+                          ps_pred_model="multinom",
+                          ps=NA,G=NA,outfun="QBART",CQR=TRUE,retrainYmodel=TRUE)
+
+# range(map19$cut3) # -1.604084  6.863563
+# add dist get warnings glm.fit do not converge???
+
+
+cut3PO<-HPI_res3[[1]] 
+cut3ITE<-HPI_res3[[2]]
+# save(HPI_res3,file="HPI_res20_dist.Rdata")
+
+# for t01 units: measure spillover as the diff between estimated t00 and observed t01
+cut3PO$lad19cd<-map19$lad19cd[HPItestid]
+cut3PO$cut3<-map19$cut3[HPItestid]
+cut3PO$ite3up<-cut3PO$up00-cut3PO$cut3
+cut3PO$ite3low<-cut3PO$low00-cut3PO$cut3
+  
+cut3PO$int_length3<-cut3PO$ite3up-cut3PO$ite3low
+hist(cut3PO$int_length3) # mostly 1.5-4
+# hist(cut3ITE$spill_up-cut3ITE$spill_lo) # mostly 8-12
+
+# find LAs stat sig experiencing negative effect i.e. both bounds are positive
+cut3PO$lad19cd[which(cut3PO$ite3low>0 & cut3PO$ite3up>0)] 
+# 0.9 none
+# 0.7 "E06000031" "E06000041" "E06000045" "E07000084" "E07000120" "E07000208" "E07000216" "E07000225" "E09000003" "E09000007" "E09000008" "E09000013" "E09000019" "E09000022" "E09000025" "E09000030" "E09000031" "E09000032"
+# Peterborough, Wokingham, Southampton, Basingstoke Deane, Hyndburn, Epsom Ewell, Wavweley, Chichester, Barnet, Camden, Croydon, Hammersmith Fulham, Islington, Lambeth, Newham, Tower Hamlets, Waltham Forest, Wandsworth
+# dist "E06000031" "E06000045" "E07000227" "E09000013" "E09000019" "E09000025" "E09000027" "E09000030" "E09000032"
+
+cut3PO$lad19cd[which(cut3PO$ite3up<0 & cut3PO$ite3low<0)] 
+# 0.9 none
+# 0.7 "E06000057" "E07000136" "E08000012" "E08000014" "E08000023" "E09000005" "S12000020" "W06000005"
+# dist "E06000047" "E07000136" "E08000023" "E09000005" "W06000005"
+
+# plot 
+map<-map[,-c(44:46)]
+map<-left_join(map,cut3PO[,c(5,7:9)])
+plot1(map, c("ite3up"),"ITE upper bound","-BrBG",0)
+plot1(map, c("ite3low"),"ITE lower bound","-BrBG",0) 
+plot1(map, c("int_length3"),"Interval length","-BrBG",0)
+```
+
+
+## additional figures 
+```{r figures}
+# figure 5 location of oil and gas industry
+plot1(map, c("oilgas_prod"))
+
+# figure 6 oil price
+brent_series$date<-as.Date(brent_series$time)
+
+ggplot(brent_series,aes(x=date,y=brentprice))+
+  geom_line(color="orange",size=1,alpha=0.9,linetype=1)+
+  theme_classic()+
+  annotate(geom="text",x=as.Date("2008-01-01"),y=140,label="Shock1 Sep2008")+
+  annotate(geom="point",x=as.Date("2008-07-01"),y=132,size=10,shape=21,fill="transparent")+
+  annotate(geom="text",x=as.Date("2014-08-01"),y=119,label="Shock2 Nov2014")+
+  annotate(geom="point",x=as.Date("2014-08-01"),y=110,size=10,shape=21,fill="transparent")+
+  annotate(geom="text",x=as.Date("2020-01-01"),y=78,label="Shock3 Feb2020")+
+  annotate(geom="point",x=as.Date("2020-01-01"),y=67,size=10,shape=21,fill="transparent")+
+  geom_line(aes(x=as.Date("2008-02-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2008-07-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2009-01-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2009-06-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2014-02-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2014-07-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2015-01-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2015-06-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2019-08-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2020-01-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2020-07-01")),color="grey",alpha=0.4)+
+  geom_line(aes(x=as.Date("2020-12-01")),color="grey",alpha=0.4)+
+  ylab("Monthly spot Brent price")+xlab("Date")
+
+ggplot(brent_series,aes(x=date,y=brentprice))+
+  geom_line(color="orange",size=1,alpha=0.9,linetype=1)+
+  theme_classic()+
+  annotate(geom="text",x=as.Date("2008-01-01"),y=140,label="Shock1 Sep2008")+
+  annotate(geom="point",x=as.Date("2008-07-01"),y=132,size=10,shape=21,fill="transparent")+
+  annotate(geom="text",x=as.Date("2014-08-01"),y=119,label="Shock2 Nov2014")+
+  annotate(geom="point",x=as.Date("2014-08-01"),y=110,size=10,shape=21,fill="transparent")+
+  annotate(geom="text",x=as.Date("2020-01-01"),y=78,label="Shock3 Feb2020")+
+  annotate(geom="point",x=as.Date("2020-01-01"),y=67,size=10,shape=21,fill="transparent")+
+  geom_line(aes(x=as.Date("2008-04-01")),color="grey",size=5,alpha=0.3)+
+  geom_line(aes(x=as.Date("2009-03-01")),color="grey",size=5,alpha=0.3)+
+  geom_line(aes(x=as.Date("2014-04-01")),color="grey",size=5,alpha=0.3)+
+  geom_line(aes(x=as.Date("2015-04-01")),color="grey",size=5,alpha=0.3)+
+  geom_line(aes(x=as.Date("2019-10-01")),color="grey",size=5,alpha=0.3)+
+  geom_line(aes(x=as.Date("2020-09-01")),color="grey",size=5,alpha=0.3)+
+  annotate("segment", x = as.Date("2007-01-01"), xend = as.Date("2008-02-01"), 
+           y = 25, yend = 25, colour = "black", size=0.8, alpha=0.4, arrow=arrow())+
+  annotate("segment", x = as.Date("2010-06-01"), xend = as.Date("2009-06-01"), 
+           y = 25, yend = 25, colour = "black", size=0.8, alpha=0.4, arrow=arrow())+
+  annotate(geom="text",x=as.Date("2005-11-01"),y=25,label="pre-shock")+
+  annotate(geom="text",x=as.Date("2011-10-01"),y=25,label="post-shock")+
+  ylab("Monthly spot Brent price (USD nominal)")+xlab("Date")
+# figure.7 network structure
+
+```
+
+```{r}
+# contrasting obsY01 with estY00
+# 2014 shock
+plotPO2<-cut2PO[,c(3,4,6)]
+plotPO2$low00<-cut2PO$low00[order(plotPO2$cut2)]
+plotPO2$low00<-ifelse(plotPO2$low00>-1.9,plotPO2$low00,-1.9)
+plotPO2$up00<-cut2PO$up00[order(plotPO2$cut2)]
+plotPO2$up00<-ifelse(plotPO2$up00<1.5,plotPO2$up00,1.5)
+plotPO2$cut2<-cut2PO$cut2[order(plotPO2$cut2)]
+colnames(plotPO2)<-c("Counterfactual_bounds_low","Counterfactual_bounds_up","Observed_value")
+plotPO2$`Ascending order by observed value`<-1:110
+plotPO2<-plotPO2[-110,]
+plotPO2<- pivot_longer(plotPO2,-4,names_to="legend",values_to = "HPI gorwth rate change")
+
+ggplot(plotPO2,aes(x=`Ascending order by observed value`,
+                   y=`HPI gorwth rate change`,color=legend))+
+  geom_line(size=1)+ theme_classic()+
+  scale_color_manual(values=c("#69b3a2","#69b3a2","orange"))
+# the significant obs are the few outliers of Y01, probably not meaningful
+
+# 2020 shock
+plotPO3<-cut3PO[,c(3,4,6)]
+plotPO3$low00<-cut3PO$low00[order(plotPO3$cut3)]
+plotPO3$up00<-cut3PO$up00[order(plotPO3$cut3)]
+plotPO3$up00<-ifelse(plotPO3$up00<3.5,plotPO3$up00,3.5)
+plotPO3$low00<-ifelse(plotPO3$low00>-2,plotPO3$low00,-2) # remove a few outliers
+plotPO3$cut3<-cut3PO$cut3[order(plotPO3$cut3)]
+colnames(plotPO3)<-c("Counterfactual_bounds_low","Counterfactual_bounds_up","Observed_value")
+plotPO3$`Ascending order by observed value`<-1:110
+plotPO3<- pivot_longer(plotPO3,-4,names_to="legend",values_to = "HPI gorwth rate change")
+
+ggplot(plotPO3,aes(x=`Ascending order by observed value`,
+                   y=`HPI gorwth rate change`,color=legend))+
+  geom_line(size=1)+ theme_classic()+
+  scale_color_manual(values=c("#69b3a2","#69b3a2","orange"))
+# not very informative. why?
+```
+
+

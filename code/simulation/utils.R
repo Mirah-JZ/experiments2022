@@ -194,6 +194,7 @@ spectral <- function(X, K) {
 # get_trnei1 get neighborhood treatment level
 # -----------------------------------------------------------------------------
 get_trnei1 <- function(tr,A,Atype){
+  n<-length(tr)
   if (Atype=="dist"){
     A0<-A
     diag(A0) <-1
@@ -203,8 +204,7 @@ get_trnei1 <- function(tr,A,Atype){
     trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE)*A0) 
     trnei <- ifelse(trnei>0.5,1,0) # neighbor treatment {0,1}, 0.5 is arbitrary here
   } else if (Atype=="adj") {
-    A0<-A
-    A0 <- A0/rowSums(A0) 
+    A0 <- A/rowSums(A) 
     trnei <- rowSums(matrix(tr,nrow=n,ncol=n,byrow=TRUE)*A0)
     trnei <- ifelse(trnei>0.5,1,0)
   }
@@ -215,6 +215,7 @@ get_trnei1 <- function(tr,A,Atype){
 # get_Xnei get neighborhood mean X 
 # -----------------------------------------------------------------------------
 get_Xnei <- function(covar,A,Atype){
+  n<-nrow(covar)
   k <- ncol(covar)
   covnei <- list()
   if(Atype=="dist") {
@@ -229,8 +230,7 @@ get_Xnei <- function(covar,A,Atype){
     covnei <- as.data.frame(do.call(cbind,covnei))
     
   } else if (Atype=="adj") {
-    A0<-A
-    A0 <- A0/rowSums(A0)
+    A0 <- A/rowSums(A)
     for (i in 1:k) {
       covnei[[i]] <- rowSums(matrix(covar[,i],nrow=n,ncol=n,byrow=TRUE)*A0)
     }
